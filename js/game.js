@@ -587,7 +587,13 @@
         if (drag.fromView) openBranchMenu(drag.segId, e.clientX, e.clientY);   // tap on coil → menu (unwire lives there)
         else toast('➰ drag the branch to bend it');
       }
-      else if (drag.type === 'bend') save();
+      else if (drag.type === 'bend') {
+        save();
+        if (mode === 'wire') {                 // bend finished: the tool puts itself away
+          setMode('view');
+          toast('➰ shaped — grab the copper coil anytime to re-bend');
+        }
+      }
       drag = null;
     };
     view.addEventListener('pointerup', endDrag);
