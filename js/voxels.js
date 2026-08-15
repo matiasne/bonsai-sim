@@ -14,6 +14,7 @@
 
   const PAL = {
     trunk: ['#8a684a', '#66492f', '#4c3524', '#372218'],
+    trunkDead: ['#98928a', '#726d64', '#55514a', '#3b3833'],
     leaf: ['#f7c9d6', '#f1a7bf', '#e287a6', '#c9688e'],       // spring bloom
     leafGreen: ['#9fce7d', '#7ab35e', '#5c9646', '#41762f'],  // summer foliage
     leafAutumn: ['#f2b06a', '#e08a4a', '#c26436', '#94492a'], // autumn color

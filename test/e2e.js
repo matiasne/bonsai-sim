@@ -844,6 +844,63 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
   await wp.close();
 
+  // --- the tree can die: sustained critical health → 🪦, care refused, NEW TREE replants
+  await page.evaluate(() => {
+    __bonsai.res.water = 0; __bonsai.res.mist = 0; __bonsai.res.food = 0; __bonsai.res.health = 8;
+    __bonsai.simulate(40 * 3600);
+  });
+  await sleep(1200);
+  const dyingState = await page.evaluate(() => ({
+    dying: __bonsai.dying, dead: __bonsai.res.dead,
+    status: document.querySelector('#status-line').textContent,
+  }));
+  check(dyingState.dying > 10 && !dyingState.dead,
+    `neglect starts the decline (${dyingState.dying.toFixed(0)}h critical, still alive)`);
+  check(/dying/.test(dyingState.status), 'status warns the tree is dying with a countdown');
+  const rescued = await page.evaluate(() => {
+    __bonsai.res.water = 85; __bonsai.res.mist = 70; __bonsai.res.food = 70;
+    __bonsai.simulate(30 * 3600);
+    return { dying: __bonsai.dying, dead: __bonsai.res.dead };
+  });
+  check(rescued.dying < dyingState.dying && !rescued.dead,
+    `good care winds the countdown back (${dyingState.dying.toFixed(0)}h → ${rescued.dying.toFixed(0)}h)`);
+  const dead = await page.evaluate(() => {
+    __bonsai.res.water = 0; __bonsai.res.mist = 0; __bonsai.res.food = 0; __bonsai.res.health = 8;
+    __bonsai.simulate(90 * 3600);
+    __bonsai.simulate(90 * 3600);
+    return { dead: __bonsai.res.dead, health: __bonsai.res.health };
+  });
+  check(!!dead.dead && dead.health === 0, 'sustained neglect kills the tree');
+  await sleep(1200);
+  const deadUi = await page.evaluate(() => ({
+    foliage: __bonsai.foliage,
+    status: document.querySelector('#status-line').textContent,
+    stage: document.querySelector('#fact-stage').textContent,
+  }));
+  check(deadUi.foliage === 'bare' && /🪦/.test(deadUi.status) && /Departed/.test(deadUi.stage),
+    'dead tree stands bare with a 🪦 status and Departed stage');
+  const refusal = await page.evaluate(() => {
+    const before = __bonsai.res.water;
+    document.querySelector('#btn-water').click();
+    document.querySelector('#btn-prune').click();
+    document.querySelector('#btn-future').click();
+    return {
+      before, after: __bonsai.res.water, mode: __bonsai.mode,
+      futureHidden: document.querySelector('#future-bar').classList.contains('hidden'),
+      tomb: [...document.querySelectorAll('.toast')].some(t => /🪦/.test(t.textContent)),
+    };
+  });
+  check(refusal.after === refusal.before && refusal.mode === 'view' && refusal.futureHidden && refusal.tomb,
+    'care, tools and visions are refused with a 🪦 message');
+  const revived = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.toast.has-action button')].find(b => /NEW TREE/.test(b.textContent));
+    if (!btn) return null;
+    btn.click();
+    return { dead: __bonsai.res.dead, health: __bonsai.res.health, segs: __bonsai.tree.segs.size };
+  });
+  check(!!revived && !revived.dead && revived.health === 82 && revived.segs < 15,
+    'the toast\'s NEW TREE button plants a fresh sapling');
+
   await browser.close();
   console.log(results.join('\n'));
   if (errors.length) { console.log('PAGE ERRORS:\n' + errors.join('\n')); process.exit(1); }

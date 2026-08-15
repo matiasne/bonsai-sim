@@ -36,6 +36,10 @@ npx serve .        # or: python3 -m http.server
 | ⏩ | time-lapse one hour |
 | ⚙ | set your city (weather), start a new tree |
 
+**⚠️ It can die.** If health stays at rock bottom for ~4 days the bonsai withers for good —
+gray wood, bare branches, care refused. You get a 🥀 *dying* warning with a countdown first,
+and good care winds the countdown back. A dead tree can only be replaced (⚙ → 🌱 NEW TREE).
+
 ## Use it as a desktop wallpaper 🖼
 
 Open **`wallpaper.html`** instead of `index.html` and you get just the living scene, edge to edge —

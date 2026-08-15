@@ -108,6 +108,8 @@
   const previewCache = new Map();
   let gp = 0, burnUntil = 0, soggy = 0;
   let trimBoost = 0;  // recent pinching lets light into the crown → growth buff
+  let dyingH = 0;     // hours spent in critical condition — reaches DEATH_H and the tree dies
+  const DEATH_H = 96; // ~4 days at rock-bottom health; recovery winds it back down
   let decals = [], decalsDirty = true;
   let springs = [];   // branches easing back after an early unwire
   let lastEnv = null, statsCache = null;
@@ -266,7 +268,7 @@
 
   // ---------- voxel → instance sync
   function colorFor(o, tier, frost, wet) {
-    if (o.kind === 'wood') return PAL.trunk[o.ci];
+    if (o.kind === 'wood') return (res.dead ? PAL.trunkDead : PAL.trunk)[o.ci];
     if (o.kind === 'wire') return PAL.wire[o.ci];
     if (o.kind === 'leaf') {
       if (frost && o.ci === 0) return PAL.leafFrostTop;
@@ -303,6 +305,7 @@
 
   let lastTier = 'pink';
   function foliageTier() {
+    if (res.dead) return 'bare';                       // 🪦
     if (previewTree) return 'pink';                    // visions bloom eternally
     if (res.health < 25) return 'bare';
     if (res.health < 55) return 'dull';
@@ -319,7 +322,7 @@
     lastTier = tier;
     const frost = !previewTree && !!(lastEnv && (lastEnv.frost || lastEnv.snowing));
     const puffScale = mode === 'wire' ? 0.6 : 1;
-    const key = [rt.rev, previewYears, Math.round(leafSum(rt) * 2), puffScale, tier, frost ? 1 : 0].join('|');
+    const key = [rt.rev, previewYears, Math.round(leafSum(rt) * 2), puffScale, tier, frost ? 1 : 0, res.dead ? 1 : 0].join('|');
     if (!force && key === treeKey) return;
     treeKey = key;
     const built = B.Voxels.buildTree(rt, { puffScale });
@@ -795,6 +798,7 @@
   function openBranchMenu(segId, clientX, clientY, kind) {
     const seg = tree.segs.get(segId);
     if (!seg || previewTree) return;
+    if (guardDead()) return;
     clearTimeout(branchMenuTimer);
     branchMenuTimer = null;
     branchMenuSeg = segId;
@@ -871,6 +875,7 @@
   }
 
   function toggleFuture() {
+    if (!futureBarOpen && guardDead()) return;   // no visions for a departed tree
     futureBarOpen = !futureBarOpen;
     $('#future-bar').classList.toggle('hidden', !futureBarOpen);
     if (futureBarOpen) {
@@ -888,8 +893,14 @@
     return true;
   }
 
+  function guardDead() {
+    if (!res.dead) return false;
+    toast('🪦 the tree has passed away — plant a new one?', { ms: 9000, action: { label: '🌱 NEW TREE', fn: freshTree } });
+    return true;
+  }
+
   function doWater() {
-    if (guardPreview()) return;
+    if (guardPreview() || guardDead()) return;
     if (res.water > 90) {
       soggy = Math.min(100, soggy + 25);
       toast('🫧 soggy! the soil is already drenched…');
@@ -901,14 +912,14 @@
   }
 
   function doMist(quiet) {
-    if (guardPreview()) return;
+    if (guardPreview() || guardDead()) return;
     res.mist = clamp(res.mist + 45, 0, 100);
     if (!quiet) toast(pick(['🌫 psssst — the leaves glisten', '🌫 a fine morning mist', '🌫 mountain air vibes']));
     mistFX(); updateAll(); save();
   }
 
   function doFeed() {
-    if (guardPreview()) return;
+    if (guardPreview() || guardDead()) return;
     res.food = clamp(res.food + 45, 0, 130);
     if (res.food > 100) {
       burnUntil = Date.now() + 12 * 3600e3;
@@ -950,6 +961,7 @@
 
   function setMode(m) {
     if (previewTree && m !== 'view') { guardPreview(); return; }
+    if (res.dead && m !== 'view') { guardDead(); return; }
     mode = (mode === m) ? 'view' : m;
     view.dataset.mode = mode;
     view.dataset.hover = '';
@@ -974,8 +986,8 @@
     drawStarterPattern();
     sandTexture.needsUpdate = true;
     tree = new B.TreeModel();
-    Object.assign(res, { water: 72, mist: 60, food: 55, health: 82 });
-    gp = 0; burnUntil = 0; soggy = 0; trimBoost = 0; decals = []; decalsDirty = true; treeKey = ''; springs = [];
+    Object.assign(res, { water: 72, mist: 60, food: 55, health: 82, dead: 0 });
+    gp = 0; burnUntil = 0; soggy = 0; trimBoost = 0; dyingH = 0; decals = []; decalsDirty = true; treeKey = ''; springs = [];
     window.__bonsai.tree = tree;
     toast('🌱 a brand-new bonsai arrives!');
     updateAll(); save();
@@ -1001,6 +1013,14 @@
     lastEnv = env;
     const off = !!(opts && opts.offline);
 
+    if (res.dead) {                       // nothing drinks, nothing grows
+      res.water = clamp(res.water - dtH * 3, 0, 100);
+      res.mist = clamp(res.mist - dtH * 7, 0, 100);
+      res.food = clamp(res.food - dtH, 0, 130);
+      res.health = 0;
+      return;
+    }
+
     res.water = clamp(res.water - dtH * (100 / 34) * env.dryMul, 0, 100);
     if (env.rainWater) res.water = Math.max(res.water, Math.min(88, res.water + dtH * env.rainWater));
     let mistIn = 0;
@@ -1025,6 +1045,24 @@
     statsCache = tree.stats();
     const target = healthTarget(env);
     res.health = clamp(res.health + clamp(target - res.health, -9 * dtH, 7 * dtH), off ? 12 : 5, 100);
+
+    if (res.health <= 15) {               // critical — the tree is slowly dying
+      if (dyingH === 0 && opts && opts.fx) toast('🥀 the tree is fading — it needs water and care, fast!');
+      dyingH += dtH;
+      if (dyingH >= DEATH_H) {
+        res.dead = Date.now();
+        res.health = 0;
+        springs = []; trimBoost = 0;
+        treeKey = '';
+        closeBranchMenu();
+        if (mode !== 'view') setMode('view');
+        toast('🪦 the little tree has withered away…', { ms: 14000, action: { label: '🌱 NEW TREE', fn: freshTree } });
+        save();
+        return;
+      }
+    } else if (res.health >= 30) {
+      dyingH = Math.max(0, dyingH - dtH * 2);
+    }
 
     const segs = tree.segs.size;
     const juv = segs < 26 ? 4.5 : segs < 60 ? 2 : 1;
@@ -1077,6 +1115,7 @@
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
       pan: Math.round(panY * 100) / 100, pix: resIdx,
       gp, burnUntil, soggy, trim: Math.round(trimBoost * 100) / 100,
+      dying: Math.round(dyingH * 10) / 10,
       decals: decals.slice(-48),
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
@@ -1456,6 +1495,8 @@
   }
 
   function careNote() {
+    if (res.dead) return '🪦 the tree has passed away — ⚙ NEW TREE plants another';
+    if (dyingH > 0 && res.health <= 20) return `🥀 the tree is dying — about ${Math.max(1, Math.ceil((DEATH_H - dyingH) / 24))}d to save it!`;
     if (res.water < 15) return '💧 the soil is dry — water me!';
     if (burnUntil > Date.now()) return '🔥 burnt roots — let the fertilizer fade';
     if (soggy > 30) return '🫧 soggy roots — ease off the watering';
@@ -1507,6 +1548,12 @@
       return;
     }
     const s = statsCache || tree.stats();
+    if (res.dead) {
+      $('#fact-stage').textContent = '🪦 Departed';
+      $('#fact-age').textContent = `age ${Math.floor(s.ageHours / 24)}d · ${s.segments} segs`;
+      $('#fact-bloom').textContent = '🥀 0';
+      return;
+    }
     const stage = s.segments < 20 ? 'Sapling' : s.segments < 45 ? 'Young' : s.segments < 80 ? 'Shaped' : s.segments < 120 ? 'Mature' : 'Ancient';
     $('#fact-stage').textContent = `${stage} bonsai`;
     $('#fact-age').textContent = `age ${Math.floor(s.ageHours / 24)}d · ${s.segments} segs`;
@@ -1578,6 +1625,7 @@
       burnUntil = data.burnUntil || 0;
       soggy = data.soggy || 0;
       trimBoost = data.trim || 0;
+      dyingH = data.dying || 0;
       decals = Array.isArray(data.decals) ? data.decals : [];
       B.Weather.hydrate(data.wx);
     }
@@ -1615,6 +1663,7 @@
       get zoom() { return zoom; },
       get pix() { return { idx: resIdx, bufW: BUFW, bufH: BUFH }; },
       get foliage() { return lastTier; },
+      get dying() { return dyingH; },
       get panY() { return panY; },
       get theta() { return theta; },
       get preview() { return previewTree ? previewYears : 0; },
