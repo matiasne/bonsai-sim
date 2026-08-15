@@ -1749,6 +1749,11 @@
     applyZoom(1);
     applyPan(0);
     applyRes(2);
+    // The viewer has no location — its foliage must follow the TREE's
+    // hemisphere (from the envelope), or a southern tree shared in August
+    // would wrongly show summer leaves instead of its winter dormancy.
+    const si = SIM.seasonInfo(Date.now(), !!dna.s);
+    B.Weather.forceSeason = { season: si.season, bloom: si.bloom };
     lastEnv = B.Weather.env(new Date());
     updateAll();
     requestAnimationFrame(frame);

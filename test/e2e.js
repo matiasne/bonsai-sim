@@ -825,6 +825,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(viewer.viewer === true && viewer.actionsHidden, 'DNA link opens the read-only viewer (care UI hidden)');
   check(viewer.segs === dnaLive.segs, `viewer replayed the exact tree (${viewer.segs} segs)`);
   check(/🧬/.test(viewer.status), 'viewer banner explains the read-only view');
+  const viewerSeason = await vp.evaluate(() => ({
+    forced: __bonsai.weather.forceSeason && __bonsai.weather.forceSeason.season,
+    shown: __bonsai.env && __bonsai.env.season,
+  }));
+  check(!!viewerSeason.forced && viewerSeason.forced === viewerSeason.shown,
+    `viewer foliage follows the tree's own hemisphere (${viewerSeason.shown})`);
   const airTap = await vp.evaluate(() => {
     const r = document.querySelector('#view').getBoundingClientRect();
     for (let dx = 10; dx < r.width - 10; dx += 12) {
