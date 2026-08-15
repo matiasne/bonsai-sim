@@ -710,8 +710,32 @@
   // ---------- FX overlay (screen-space pixel particles)
   const fxCtx = fxCanvas.getContext('2d');
   const parts = [];
+  let canAnim = null, glintUntil = 0;
 
   function addPart(p) { if (parts.length < 420) parts.push(p); }
+
+  const ease = (k) => 1 - Math.pow(1 - clamp(k, 0, 1), 3);
+
+  // tin watering can, origin at the spout mouth, pouring to the left
+  const CAN_RECTS = [
+    [8, -7, 11, 1, '#22303f'],   // rim
+    [8, -6, 11, 9, '#9fb0c0'],   // body
+    [8, -6, 11, 1, '#c4d2dd'],   // top highlight
+    [8, 1, 11, 2, '#6b7a8a'],    // bottom shade
+    [1, -1, 3, 2, '#9fb0c0'],    // spout pipe
+    [3, -3, 3, 2, '#9fb0c0'],
+    [5, -5, 3, 3, '#9fb0c0'],
+    [-2, -2, 3, 4, '#6b7a8a'],   // sprinkler head
+    [10, -11, 8, 1, '#6b7a8a'],  // handle
+    [9, -10, 1, 3, '#6b7a8a'],
+    [18, -10, 1, 3, '#6b7a8a'],
+  ];
+  function drawSprite(ctx, x, y, rects) {
+    for (const [dx, dy, w, h, c] of rects) {
+      ctx.fillStyle = c;
+      ctx.fillRect(Math.round(x + dx), Math.round(y + dy), w, h);
+    }
+  }
 
   function canopyScreen() {
     if (!canopy) return { x: BUFW / 2, y: BUFH / 2 - 20, w: 40, h: 30 };
@@ -727,13 +751,10 @@
   }
 
   function waterFX() {
-    const c = canopyScreen();
-    for (let i = 0; i < 26; i++) {
-      addPart({
-        kind: 'drop', x: c.x + (fxRng.next() - 0.5) * c.w, y: c.y - c.h / 2 - 6 - fxRng.next() * 26,
-        vx: 0, vy: 90 + fxRng.next() * 50, ttl: 2, t: 0, c: '#5ea7d8', w: 1, h: 2,
-      });
-    }
+    // the watering can slides in and pours; re-watering mid-pour extends it
+    if (canAnim && canAnim.t > 0.45 && canAnim.t < 1.7) canAnim.t = 0.6;
+    else canAnim = { t: 0 };
+    glintUntil = Date.now() + 40000;   // wet pebbles sparkle for a while
   }
   function mistFX() {
     const c = canopyScreen();
@@ -810,7 +831,8 @@
         const limit = p.floor === undefined ? fy : p.floor;
         if (p.y >= limit) {
           parts.splice(i, 1);
-          if (fxRng.next() < 0.6) addPart({ kind: 'spark', x: p.x, y: limit - 1, vx: (fxRng.next() - 0.5) * 24, vy: -18, g: 160, ttl: 0.28, t: 0, c: p.c, w: 1, h: 1 });
+          if (fxRng.next() < 0.7) addPart({ kind: 'spark', x: p.x, y: limit - 1, vx: (fxRng.next() - 0.5) * 34, vy: -22 - fxRng.next() * 16, g: 200, ttl: 0.3, t: 0, c: p.c, w: 1, h: 1 });
+          if (fxRng.next() < 0.22) addPart({ kind: 'ring', x: p.x, y: limit, vx: 0, vy: 0, ttl: 0.5, t: 0, c: '#8fc4e8', w: 1, h: 1 });
           continue;
         }
       }
@@ -833,12 +855,62 @@
         fxCtx.fillStyle = p.c;
         fxCtx.fillRect(Math.round(p.x - r), Math.round(p.y - r / 2), r * 2, r);
         fxCtx.globalAlpha = 1;
+      } else if (p.kind === 'ring') {   // splash ripple on the soil
+        const k = p.t / p.ttl;
+        fxCtx.globalAlpha = 0.7 * (1 - k);
+        fxCtx.fillStyle = p.c;
+        const r = 1.5 + k * 5;
+        for (let a = 0; a < 8; a++) {
+          const ang = a * Math.PI / 4;
+          fxCtx.fillRect(Math.round(p.x + Math.cos(ang) * r), Math.round(p.y + Math.sin(ang) * r * 0.35), 1, 1);
+        }
+        fxCtx.globalAlpha = 1;
       } else if (p.kind === 'spark') {
         if ((tms / 80 | 0) % 2 === 0) { fxCtx.fillStyle = p.c; fxCtx.fillRect(p.x | 0, p.y | 0, p.w, p.h); }
       } else {
         fxCtx.fillStyle = p.c;
         fxCtx.fillRect(p.x | 0, p.y | 0, p.w, p.h);
       }
+    }
+
+    // freshly watered soil glints for a while (world-anchored, spins with the pot)
+    if (Date.now() < glintUntil && fxRng.next() < 0.07) {
+      const spot = B.Voxels.pebbleSpot(() => fxRng.next());
+      const g = projectLocalPt(spot.u, GEO.potTopY + 1.6, spot.v);
+      if (g.x > 0 && g.x < BUFW) {
+        addPart({ kind: 'spark', x: g.x, y: g.y, vx: 0, vy: 0, ttl: 0.45, t: 0, c: pick(['#cfe9f5', '#ffffff']), w: 1, h: 1 });
+      }
+    }
+
+    // the watering can: slide in from the right, pour over the canopy, slide out
+    if (canAnim) {
+      canAnim.t += dt;
+      const T = canAnim.t;
+      const c = canopyScreen();
+      const tx = clamp(c.x + c.w * 0.2, 30, BUFW - 24);
+      const ty = Math.max(14, c.y - c.h / 2 - 12);
+      let x;
+      if (T < 0.45) x = BUFW + 20 - (BUFW + 20 - tx) * ease(T / 0.45);
+      else if (T < 1.7) x = tx;
+      else x = tx + (BUFW + 20 - tx) * ease((T - 1.7) / 0.55);
+      const y = ty + (T > 0.45 && T < 1.7 ? Math.round(Math.sin(T * 9)) : 0);
+      if (T > 0.45 && T < 1.7) {
+        for (let i = 0; i < 3; i++) {
+          if (fxRng.next() < 0.85) {
+            addPart({
+              kind: 'drop', x: x - 2 + (fxRng.next() - 0.5) * 3, y: y + 1,
+              vx: -14 - fxRng.next() * 20, vy: 8 + fxRng.next() * 22, g: 230,
+              ttl: 2.5, t: 0, c: pick(['#5ea7d8', '#8fc4e8', '#cfe9f5']),
+              w: fxRng.next() < 0.3 ? 2 : 1, h: 2,
+            });
+          }
+        }
+        if (fxRng.next() < 0.5) {
+          addPart({ kind: 'spark', x: x - 6 - fxRng.next() * 8, y: y + 3 + fxRng.next() * 5, vx: -8, vy: 10, ttl: 0.5, t: 0, c: '#cfe9f5', w: 1, h: 1 });
+        }
+      }
+      drawSprite(fxCtx, x, y, CAN_RECTS);
+      if (T > 2.35) canAnim = null;
     }
   }
 
