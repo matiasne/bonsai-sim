@@ -619,6 +619,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const plainCount = await page.evaluate(() => document.querySelectorAll('#toasts .toast:not(.has-action)').length);
   check(plainCount === 1, `plain messages never stack (${plainCount} visible after two quick actions)`);
 
+  // identical repeated message: kept, not re-shown (soggy toast is deterministic)
+  await page.evaluate(() => { __bonsai.res.water = 95; });
+  await page.click('#btn-water');
+  await sleep(200);
+  await page.evaluate(() => { const t = document.querySelector('#toasts .toast'); if (t) t.dataset.mark = '1'; });
+  await page.click('#btn-water');
+  await sleep(200);
+  const dedupe = await page.evaluate(() => {
+    const ts = document.querySelectorAll('#toasts .toast:not(.has-action)');
+    return { count: ts.length, kept: ts[0] ? ts[0].dataset.mark === '1' : false };
+  });
+  check(dedupe.count === 1 && dedupe.kept, 'repeating the same message does not re-show it');
+  await page.evaluate(() => { __bonsai.res.water = 70; });
+
   // --- zoom: wheel, pan on the pot, buttons, recenter
   await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });
   const z0 = await page.evaluate(() => __bonsai.zoom);

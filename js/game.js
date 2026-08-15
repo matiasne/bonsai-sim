@@ -38,6 +38,16 @@
 
   function toast(msg, opts) {
     opts = opts || {};
+    if (!opts.action) {
+      // the same message is already up: keep it, don't re-pop it
+      for (const old of toastsEl.children) {
+        if (!old.classList.contains('has-action') && old.textContent === msg) {
+          clearTimeout(old._t);
+          old._t = setTimeout(() => old.remove(), opts.ms || 3400);
+          return;
+        }
+      }
+    }
     const el = document.createElement('div');
     el.className = 'toast';
     el.textContent = msg;
@@ -72,7 +82,7 @@
     }
     el.style.left = x + 'px';
     el.style.top = y + 'px';
-    setTimeout(() => el.remove(), opts.ms || 3400);
+    el._t = setTimeout(() => el.remove(), opts.ms || 3400);
   }
 
   const store = {
