@@ -262,6 +262,62 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const afterCoil = await page.evaluate((id) => ({ dir: __bonsai.tree.segs.get(id).dir.slice(), mode: __bonsai.mode }), bt2.id);
       const movedDir = Math.abs(afterCoil.dir[0] - dir0[0]) + Math.abs(afterCoil.dir[1] - dir0[1]) + Math.abs(afterCoil.dir[2] - dir0[2]) > 0.01;
       check(movedDir && afterCoil.mode === 'view', 'dragging the coil bent the branch without leaving view mode');
+
+      // tap the coil → UNWIRE → warning (not set yet) → confirm → the branch springs back
+      const coil2 = await page.evaluate((id) => {
+        const v = document.querySelector('#view');
+        const r = v.getBoundingClientRect();
+        const s = __bonsai.tree.segs.get(id);
+        if (!s || !s.wired) return null;
+        const mid = [(s.start[0] + s.end[0]) / 2, (s.start[1] + s.end[1]) / 2, (s.start[2] + s.end[2]) / 2];
+        const p = __bonsai.project(mid);
+        const bx = r.left + (p.x / v.width) * r.width, by = r.top + (p.y / v.height) * r.height;
+        for (let oy = -14; oy <= 14; oy += 2) {
+          for (let ox = -14; ox <= 14; ox += 2) {
+            const hit = __bonsai.sceneAt(bx + ox, by + oy);
+            if (hit && hit.target === 'wire' && hit.segId === id) return { x: bx + ox, y: by + oy };
+          }
+        }
+        return null;
+      }, bt2.id);
+      check(!!coil2, 'found the coil again after bending');
+      if (coil2) {
+        const spring0 = await page.evaluate((id) => {
+          const s = __bonsai.tree.segs.get(id);
+          const n = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
+          const a = n(s.dir), b = n(s.dir0);
+          return {
+            dir0: s.dir0.slice(),
+            angle: Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))),
+          };
+        }, bt2.id);
+        await page.mouse.click(coil2.x, coil2.y);
+        await sleep(250);
+        const unwireLabel = await page.evaluate(() => document.querySelector('#bm-wire').textContent);
+        check(/UNWIRE/.test(unwireLabel), 'coil tap opens the menu offering UNWIRE');
+        await page.click('#bm-wire');
+        await sleep(250);
+        const confirmBtn = await page.evaluate(() => {
+          const b = document.querySelector('.toast button');
+          return b ? b.textContent : null;
+        });
+        check(confirmBtn === 'REMOVE', 'early unwire warns and asks for confirmation');
+        const stillWired = await page.evaluate((id) => __bonsai.tree.segs.get(id).wired, bt2.id);
+        check(stillWired === true, 'wire stays on until the warning is confirmed');
+        await page.evaluate(() => document.querySelector('.toast button').click());
+        await sleep(2000);   // spring-back animation
+        const springEnd = await page.evaluate((args) => {
+          const s = __bonsai.tree.segs.get(args.id);
+          const n = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
+          const a = n(s.dir), b = n(args.dir0);
+          return {
+            wired: s.wired,
+            angle: Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))),
+          };
+        }, { id: bt2.id, dir0: spring0.dir0 });
+        check(springEnd.wired === false && springEnd.angle < Math.max(0.02, spring0.angle * 0.5),
+          `unset branch sprang back toward its original direction (${spring0.angle.toFixed(2)} → ${springEnd.angle.toFixed(2)} rad)`);
+      }
     }
   }
 

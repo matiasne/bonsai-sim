@@ -70,6 +70,7 @@
   const previewCache = new Map();
   let gp = 0, burnUntil = 0, soggy = 0;
   let decals = [], decalsDirty = true;
+  let springs = [];   // branches easing back after an early unwire
   let lastEnv = null, statsCache = null;
   let lastTick = Date.now(), lastSaveAt = Date.now();
   let drag = null, lastInteract = 0;
@@ -450,7 +451,10 @@
         if (hit) {
           const seg = tree.segs.get(hit.segId);
           if (seg && !seg.wired) {
-            if (tree.wire(hit.segId, true) !== null) toast('➰ wire on — drag to bend · sets & pops off in ~2 days');
+            if (tree.wire(hit.segId, true) !== null) {
+              cancelSpring(hit.segId);
+              toast('➰ wire on — drag to bend · sets & pops off in ~2 days');
+            }
           }
           drag = { type: 'bend', segId: hit.segId, lastX: e.clientX, lastY: e.clientY, moved: 0 };
           return;
@@ -594,11 +598,7 @@
       const hit = pickAt(e.clientX, e.clientY);
       if (hit) {
         const seg = tree.segs.get(hit.segId);
-        if (seg && seg.wired) {
-          tree.wire(hit.segId, false);
-          toast('➰ wire removed');
-          save();
-        }
+        if (seg && seg.wired) requestUnwire(hit.segId);
       }
     });
 
@@ -620,6 +620,60 @@
 
     window.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
     window.addEventListener('pagehide', save);
+  }
+
+  // ---------- wire removal + spring-back
+  function cancelSpring(id) { springs = springs.filter(sp => sp.id !== id); }
+
+  // Removing an unset wire is a decision: warn first (the wire needs time on
+  // the branch for the shape to hold), remove only on confirmation.
+  function requestUnwire(id) {
+    const seg = tree.segs.get(id);
+    if (!seg || !seg.wired) return;
+    const Vv = B.Vec;
+    const setFrac = clamp(seg.wireAge / B.TreeCFG.wireSetHours, 0, 1);
+    let springAngle = 0;
+    if (seg.dir0) {
+      const dot = clamp(Vv.dot(Vv.norm(seg.dir), Vv.norm(seg.dir0)), -1, 1);
+      springAngle = Math.acos(dot) * (1 - setFrac);
+    }
+    if (springAngle > 0.02) {
+      const hoursLeft = Math.max(1, Math.ceil(B.TreeCFG.wireSetHours - seg.wireAge));
+      toast(`⚠ not set yet — it needs the wire ~${hoursLeft}h more or the branch will spring back`, {
+        ms: 7000,
+        action: { label: 'REMOVE', fn: () => doUnwire(id) },
+      });
+    } else {
+      doUnwire(id);
+    }
+  }
+
+  // Unwire a branch. If the wire wasn't on long enough for the branch to
+  // stabilize (< wireSetHours), it slowly springs back toward its pre-wiring
+  // direction — proportionally to how unset it still is.
+  function doUnwire(id) {
+    const seg = tree.segs.get(id);
+    if (!seg || !seg.wired) return;
+    const Vv = B.Vec;
+    const dir0 = seg.dir0 && seg.dir0.slice();
+    const setFrac = clamp(seg.wireAge / B.TreeCFG.wireSetHours, 0, 1);
+    tree.wire(id, false);
+    let sprung = false;
+    if (dir0) {
+      const cur = seg.dir;
+      const axis = Vv.cross(cur, dir0);
+      const dot = clamp(Vv.dot(Vv.norm(cur), Vv.norm(dir0)), -1, 1);
+      const total = Math.acos(dot) * (1 - setFrac);
+      if (Vv.len(axis) > 1e-4 && total > 0.02) {
+        cancelSpring(id);
+        springs.push({ id, axis: Vv.norm(axis), remaining: total });
+        sprung = true;
+      }
+    }
+    toast(sprung
+      ? (setFrac > 0.5 ? '➰ wire off — mostly set, it springs back a little' : '➰ wire off — not set yet, the branch springs back')
+      : '➰ wire removed');
+    save();
   }
 
   // ---------- branch context menu (tap a branch → ✂️/➰ right there)
@@ -762,7 +816,7 @@
     sandTexture.needsUpdate = true;
     tree = new B.TreeModel();
     Object.assign(res, { water: 72, mist: 60, food: 55, health: 82 });
-    gp = 0; burnUntil = 0; soggy = 0; decals = []; decalsDirty = true; treeKey = '';
+    gp = 0; burnUntil = 0; soggy = 0; decals = []; decalsDirty = true; treeKey = ''; springs = [];
     window.__bonsai.tree = tree;
     toast('🌱 a brand-new bonsai arrives!');
     updateAll(); save();
@@ -1132,10 +1186,9 @@
       const seg = id !== null && tree.segs.get(id);
       if (!seg) return;
       if (seg.wired) {
-        tree.wire(id, false);
-        toast('➰ wire removed');
-        save();
+        requestUnwire(id);
       } else if (tree.wire(id, true) !== null) {
+        cancelSpring(id);
         toast('➰ wire on — drag the branch to bend · sets in ~2 days' + (WALLPAPER ? ' · tap empty space to finish' : ''));
         if (mode !== 'wire') setMode('wire');   // ready to bend right away
         save();
@@ -1299,6 +1352,15 @@
       if (Math.abs(thetaVel) < 0.0001) thetaVel = 0;
     }
     if (WALLPAPER && !drag && tms - lastInteract > 30000) theta += dt * 0.02;  // idle: slow turntable
+    if (springs.length) {   // early-unwired branches ease back toward their old direction
+      for (let i = springs.length - 1; i >= 0; i--) {
+        const sp = springs[i];
+        const step = Math.min(sp.remaining, Math.max(0.003, sp.remaining * dt * 1.8));
+        if (!tree.nudge(sp.id, sp.axis, step)) { springs.splice(i, 1); continue; }
+        sp.remaining -= step;
+        if (sp.remaining < 0.005) springs.splice(i, 1);
+      }
+    }
     rotGroup.rotation.y = theta;
     const swayA = lastEnv ? lastEnv.sway : 0.3;
     treeMesh.rotation.z = Math.sin(tms / 625) * 0.012 * swayA;

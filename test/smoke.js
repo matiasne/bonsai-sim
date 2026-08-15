@@ -82,6 +82,8 @@ if (!branch) branch = [...t.segs.values()].find(s => s.pid !== null && !s.cut);
 ok(!!branch, 'found a bendable branch');
 ok(t.bend(branch.id, [0, 0, 1], 0.1) === false, 'unwired branch refuses to bend');
 ok(t.wire(branch.id, true) === true, 'wire attaches');
+ok(Array.isArray(t.segs.get(branch.id).dir0), 'wiring records the original direction');
+const d0keep = t.segs.get(branch.id).dir0.slice();
 const preDirs = JSON.stringify([...t.segs.values()].map(s => s.dir));
 const bent = t.bend(branch.id, [0, 0, 1], 0.08);
 ok(typeof bent === 'boolean', 'bend returns verdict');
@@ -94,7 +96,12 @@ const hugeBend = t.bend(branch.id, [1, 0, 0], -1.4);
 for (const s of t.segs.values()) ok2NoNaN(s);
 console.log('  ✓ extreme bend attempt left no NaN (applied:', hugeBend, ')');
 passed++;
+ok(t.segs.get(branch.id).dir0[0] === d0keep[0] && t.segs.get(branch.id).dir0[1] === d0keep[1],
+  'dir0 keeps the pre-bend direction through bends');
 ok(t.wire(branch.id, false) === false, 'unwire works');
+ok(t.segs.get(branch.id).dir0 === null, 'unwire clears dir0');
+ok(t.nudge(branch.id, [0, 0, 1], 0.05) === true, 'nudge rotates without wire (spring-back path)');
+t.nudge(branch.id, [0, 0, 1], -0.05);
 
 console.log('wire auto-release (branch sets)');
 t.wire(branch.id, true);
@@ -104,6 +111,7 @@ const serMid = new B.TreeModel(t.serialize());
 ok(Math.abs(serMid.segs.get(branch.id).wireAge - 47) < 0.2, 'wireAge survives save round-trip');
 rel = t.ageWires(2);
 ok(rel.length === 1 && t.segs.get(branch.id).wired === false, 'wire auto-released at ~48h (branch set)');
+ok(t.segs.get(branch.id).dir0 === null, 'auto-release clears dir0 (shape is permanent)');
 ok(!B.Voxels.buildTree(t).voxels.some(v => v.kind === 'wire'), 'coils gone after release');
 
 console.log('serialize round-trip');

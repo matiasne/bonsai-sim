@@ -73,7 +73,7 @@
       const s = {
         id: this.nextId++, pid: parent ? parent.id : null,
         dir: V.norm(dir), len, maxLen, order,
-        wired: false, wireAge: 0, cut: false, tipAge: 0, budBoost: 0,
+        wired: false, wireAge: 0, dir0: null, cut: false, tipAge: 0, budBoost: 0,
         children: [], start: [0, 0, 0], end: [0, 0, 0], thick: 1, tipCount: 1, runLen: 0,
       };
       this.segs.set(s.id, s);
@@ -278,14 +278,18 @@
         id: s.id, pid: s.pid,
         dir: [s.dir[0], s.dir[1], s.dir[2]],
         len: s.len, maxLen: s.maxLen, order: s.order,
-        wired: s.wired ? 1 : 0, wireAge: s.wireAge || 0, cut: s.cut ? 1 : 0,
+        wired: s.wired ? 1 : 0, wireAge: s.wireAge || 0,
+        dir0: s.dir0 ? [s.dir0[0], s.dir0[1], s.dir0[2]] : 0,
+        cut: s.cut ? 1 : 0,
         tipAge: s.tipAge, budBoost: s.budBoost,
       };
     }
     _revive(d) {
       return {
         id: d.id, pid: d.pid, dir: V.norm(d.dir), len: d.len, maxLen: d.maxLen,
-        order: d.order, wired: !!d.wired, wireAge: d.wireAge || 0, cut: !!d.cut,
+        order: d.order, wired: !!d.wired, wireAge: d.wireAge || 0,
+        dir0: Array.isArray(d.dir0) ? d.dir0.slice() : null,
+        cut: !!d.cut,
         tipAge: d.tipAge || 0, budBoost: d.budBoost || 0,
         children: [], start: [0, 0, 0], end: [0, 0, 0], thick: 1, tipCount: 1, runLen: 0,
       };
@@ -333,6 +337,7 @@
       if (!s || s.pid === null || s.cut) return null;
       s.wired = on === undefined ? !s.wired : !!on;
       s.wireAge = 0;
+      s.dir0 = s.wired ? s.dir.slice() : null;   // remember where the branch was
       this.rev++;
       return s.wired;
     }
@@ -346,6 +351,7 @@
         if (s.wireAge >= CFG.wireSetHours) {
           s.wired = false;
           s.wireAge = 0;
+          s.dir0 = null;                        // fully set: the shape is permanent
           released.push({ id: s.id, at: s.end.slice() });
         }
       }
@@ -367,6 +373,24 @@
         this.recompute();
         return false;
       }
+      const renorm = (x) => { x.dir = V.norm(x.dir); for (const c of x.children) renorm(c); };
+      renorm(s);
+      this.recompute();
+      this.rev++;
+      return true;
+    }
+
+    // Like bend, but without the wire requirement — used for spring-back animation.
+    nudge(id, axis, ang) {
+      const s = this.segs.get(id);
+      if (!s || !isFinite(ang) || ang === 0) return false;
+      const rot = (x, a) => { x.dir = V.rotate(x.dir, axis, a); for (const c of x.children) rot(c, a); };
+      rot(s, ang);
+      this.recompute();
+      let minY = Infinity;
+      const scan = (x) => { minY = Math.min(minY, x.end[1]); for (const c of x.children) scan(c); };
+      scan(s);
+      if (minY < CFG.minBendY) { rot(s, -ang); this.recompute(); return false; }
       const renorm = (x) => { x.dir = V.norm(x.dir); for (const c of x.children) renorm(c); };
       renorm(s);
       this.recompute();
