@@ -7,6 +7,7 @@ Thumbs.db
 .idea/
 *.swp
 
-# Node (none needed to run, but keep clean if anyone adds tooling)
+# Node (dev tooling only — the game itself has no build)
 node_modules/
 npm-debug.log*
+package-lock.json

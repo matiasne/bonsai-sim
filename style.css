@@ -106,6 +106,10 @@ button.chip:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink);
 }
 #view[data-mode="view"][data-hover="wood"],
 #view[data-mode="view"][data-hover="wire"] { cursor: pointer; }
+#view[data-mode="view"][data-hover="sand"] {
+  /* zen rake: wooden handle + 4 teeth, hotspot at the teeth */
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cg%20fill='none'%20stroke-linecap='round'%3E%3Cpath%20d='M24%2024%20L11%2011'%20stroke='white'%20stroke-width='6'/%3E%3Cpath%20d='M24%2024%20L11%2011'%20stroke='%237b4a2d'%20stroke-width='3'/%3E%3Cpath%20d='M4%2013%20L13%204'%20stroke='white'%20stroke-width='6'/%3E%3Cpath%20d='M4%2013%20L13%204'%20stroke='%236b7a8a'%20stroke-width='3'/%3E%3Cpath%20d='M5%2012%20l-3%20-3%20M8%209%20l-3%20-3%20M11%206%20l-3%20-3%20M14%203%20l-3%20-3'%20stroke='white'%20stroke-width='3.5'/%3E%3Cpath%20d='M5%2012%20l-3%20-3%20M8%209%20l-3%20-3%20M11%206%20l-3%20-3%20M14%203%20l-3%20-3'%20stroke='%236b7a8a'%20stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E") 5 7, pointer;
+}
 #view[data-mode="view"][data-hover="pebble"] {
   cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cg%20stroke='%2322303f'%20stroke-width='1.5'%20fill='%23e3cf6b'%3E%3Ccircle%20cx='9'%20cy='18'%20r='4.5'/%3E%3Ccircle%20cx='16'%20cy='9'%20r='4.5'/%3E%3Ccircle%20cx='20'%20cy='19'%20r='4.5'/%3E%3C/g%3E%3C/svg%3E") 14 14, pointer;
 }

@@ -77,6 +77,8 @@
 
   // ---------- Three.js scene
   let scene, camera, renderer, rotGroup, potMesh, treeMesh, decalMesh, starPts, starMat;
+  const SAND_S = 29, SAND_TEX = 128;   // zen sand: half-extent (world units), texture px
+  let sandCanvas, sandCtx, sandTexture, sandMesh, sandFade = 0;
   let m4, q4, v3, sc3, col;
   const treeSegByInst = [], treeKindByInst = [];
   let potVox = null, canopy = null;
@@ -114,6 +116,38 @@
     decalMesh = makeInstMesh(64);
     rotGroup.add(potMesh, treeMesh, decalMesh);
 
+    // zen sand tray: rakeable canvas-textured square under the pot, wooden frame
+    sandCanvas = document.createElement('canvas');
+    sandCanvas.width = sandCanvas.height = SAND_TEX;
+    sandCtx = sandCanvas.getContext('2d');
+    drawSandBase();
+    drawStarterPattern();
+    sandTexture = new THREE.CanvasTexture(sandCanvas);
+    sandTexture.magFilter = THREE.NearestFilter;
+    sandTexture.minFilter = THREE.NearestFilter;
+    sandMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(SAND_S * 2, SAND_S * 2),
+      new THREE.MeshBasicMaterial({ map: sandTexture })
+    );
+    sandMesh.rotation.x = -Math.PI / 2;
+    sandMesh.position.y = 0;
+    rotGroup.add(sandMesh);
+    const slab = new THREE.Mesh(
+      new THREE.BoxGeometry(SAND_S * 2, 2, SAND_S * 2),
+      new THREE.MeshBasicMaterial({ color: 0xcfc4a6 })
+    );
+    slab.position.y = -1.05;
+    rotGroup.add(slab);
+    const frameMat = new THREE.MeshBasicMaterial({ color: 0x54392a });
+    for (const [fx, fz, fw, fd] of [
+      [0, -(SAND_S + 1), SAND_S * 2 + 4, 2], [0, SAND_S + 1, SAND_S * 2 + 4, 2],
+      [-(SAND_S + 1), 0, 2, SAND_S * 2], [SAND_S + 1, 0, 2, SAND_S * 2],
+    ]) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(fw, 3, fd), frameMat);
+      f.position.set(fx, -0.6, fz);
+      rotGroup.add(f);
+    }
+
     const shadow = new THREE.Mesh(
       new THREE.CircleGeometry(1, 24),
       new THREE.MeshBasicMaterial({ color: 0x1a2430, transparent: true, opacity: 0.10 })
@@ -139,6 +173,55 @@
     scene.add(starPts);
 
     potVox = B.Voxels.buildPot();
+  }
+
+  // ---------- zen sand drawing
+  function drawSandBase() {
+    sandCtx.globalAlpha = 1;
+    sandCtx.fillStyle = '#e3dabe';
+    sandCtx.fillRect(0, 0, SAND_TEX, SAND_TEX);
+    for (let i = 0; i < 2400; i++) {
+      sandCtx.fillStyle = pick(['#ded4b4', '#eae2c9', '#d6cba9']);
+      sandCtx.fillRect((fxRng.next() * SAND_TEX) | 0, (fxRng.next() * SAND_TEX) | 0, 1, 1);
+    }
+  }
+  function ringRake(r) {
+    const k = SAND_TEX / (2 * SAND_S);
+    sandCtx.strokeStyle = '#c6b995'; sandCtx.lineWidth = 1.3;
+    sandCtx.beginPath(); sandCtx.arc(SAND_TEX / 2, SAND_TEX / 2, r * k, 0, 7); sandCtx.stroke();
+    sandCtx.strokeStyle = '#f4eeda'; sandCtx.lineWidth = 1;
+    sandCtx.beginPath(); sandCtx.arc(SAND_TEX / 2, SAND_TEX / 2 - 1, r * k, 0, 7); sandCtx.stroke();
+  }
+  function drawStarterPattern() {
+    for (const r of [14, 18.5, 23, 27.5]) ringRake(r);   // classic rings around the "rock"
+  }
+  function drawRakeSegment(a, b) {  // 4-tooth rake stroke, in texture px
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.8) return false;
+    const px = -dy / len, py = dx / len;
+    sandCtx.lineCap = 'round';
+    for (const o of [-3.4, -1.15, 1.15, 3.4]) {
+      sandCtx.strokeStyle = '#c6b995'; sandCtx.lineWidth = 1.3;
+      sandCtx.beginPath();
+      sandCtx.moveTo(a.x + px * o, a.y + py * o);
+      sandCtx.lineTo(b.x + px * o, b.y + py * o);
+      sandCtx.stroke();
+      sandCtx.strokeStyle = '#f4eeda'; sandCtx.lineWidth = 0.9;
+      sandCtx.beginPath();
+      sandCtx.moveTo(a.x + px * o, a.y + py * o - 1);
+      sandCtx.lineTo(b.x + px * o, b.y + py * o - 1);
+      sandCtx.stroke();
+    }
+    sandTexture.needsUpdate = true;
+    return true;
+  }
+  function drawDimple(p) {
+    sandCtx.strokeStyle = '#c6b995'; sandCtx.lineWidth = 1.2;
+    sandCtx.beginPath(); sandCtx.arc(p.x, p.y, 2.2, 0, 7); sandCtx.stroke();
+    sandCtx.strokeStyle = '#f4eeda'; sandCtx.lineWidth = 1;
+    sandCtx.beginPath(); sandCtx.arc(p.x, p.y - 1, 2.2, 0, 7); sandCtx.stroke();
+    sandTexture.needsUpdate = true;
   }
 
   // ---------- voxel → instance sync
@@ -267,8 +350,12 @@
       const nx = (bx + ox / BUFW) * 2 - 1;
       const ny = -((by + oy / BUFH) * 2 - 1);
       ray.setFromCamera({ x: nx, y: ny }, camera);
-      const hits = ray.intersectObjects([treeMesh, potMesh]);
+      const hits = ray.intersectObjects([treeMesh, potMesh, sandMesh]);
       for (const h of hits) {
+        if (h.object === sandMesh) {
+          if (opts.treeOnly) continue;
+          return { target: 'sand' };
+        }
         if (h.instanceId === undefined) continue;
         if (h.object === potMesh) {
           if (opts.treeOnly) continue;
@@ -282,6 +369,23 @@
       }
     }
     return null;
+  }
+
+  // Where does the pointer land on the sand? → texture px, or null.
+  function sandHit(clientX, clientY) {
+    scene.updateMatrixWorld();
+    if (!ray) ray = new THREE.Raycaster();
+    const rect = view.getBoundingClientRect();
+    ray.setFromCamera({
+      x: ((clientX - rect.left) / rect.width) * 2 - 1,
+      y: -(((clientY - rect.top) / rect.height) * 2 - 1),
+    }, camera);
+    const h = ray.intersectObject(sandMesh)[0];
+    if (!h) return null;
+    v3.copy(h.point);
+    rotGroup.worldToLocal(v3);
+    const k = SAND_TEX / (2 * SAND_S);
+    return { x: clamp((v3.x + SAND_S) * k, 0, SAND_TEX), y: clamp((v3.z + SAND_S) * k, 0, SAND_TEX) };
   }
 
   // Branch picking for the ✂️/➰ tools (tree only, blocked during visions).
@@ -353,6 +457,8 @@
         else if (!s) drag = { type: 'maybeTap', action: 'water', start };   // pour from above
         else if (s && (s.target === 'wood' || s.target === 'wire') && !previewTree) {
           drag = { type: 'maybeBranch', segId: s.segId, start };            // tap → ✂️/➰ menu
+        } else if (s && s.target === 'sand') {
+          drag = { type: 'rake', last: sandHit(e.clientX, e.clientY), moved: 0 };
         }
       } else if (WALLPAPER) {
         setMode('view');   // no toolbar on the desktop: tap empty space to put the tool away
@@ -388,6 +494,26 @@
       }
       if (drag.type === 'maybePrune' || drag.type === 'maybeTap' || drag.type === 'maybeBranch') {
         if (Math.hypot(e.clientX - drag.start.x, e.clientY - drag.start.y) > 6) drag = null;
+        return;
+      }
+      if (drag.type === 'rake') {
+        const p = sandHit(e.clientX, e.clientY);
+        if (p && drag.last) {
+          if (drawRakeSegment(drag.last, p)) {
+            drag.moved += Math.hypot(p.x - drag.last.x, p.y - drag.last.y);
+            drag.last = p;
+            if (fxRng.next() < 0.4) {                       // kicked-up sand grains
+              const rect = view.getBoundingClientRect();
+              addPart({
+                kind: 'spark',
+                x: ((e.clientX - rect.left) / rect.width) * BUFW,
+                y: ((e.clientY - rect.top) / rect.height) * BUFH - 1,
+                vx: (fxRng.next() - 0.5) * 16, vy: -8 - fxRng.next() * 10, g: 140,
+                ttl: 0.35, t: 0, c: pick(['#d8cdaa', '#eae2c9']), w: 1, h: 1,
+              });
+            }
+          }
+        } else if (p) drag.last = p;
         return;
       }
       if (drag.type === 'rotate') {
@@ -436,6 +562,10 @@
       if (drag.type === 'maybePrune' && drag.hit) doCut(drag.hit.segId);
       else if (drag.type === 'maybeTap') (drag.action === 'mist' ? doMist : doWater)();
       else if (drag.type === 'maybeBranch') openBranchMenu(drag.segId, e.clientX, e.clientY);
+      else if (drag.type === 'rake') {
+        if (drag.moved < 3 && drag.last) drawDimple(drag.last);
+        save();
+      }
       else if (drag.type === 'rotate' && (drag.moved || 0) < 6 && drag.tap === 'pebble' && mode === 'view') doFeed();
       else if (drag.type === 'bend' && drag.moved < 3) toast('➰ drag the branch to bend it');
       else if (drag.type === 'bend') save();
@@ -612,6 +742,9 @@
   function freshTree() {
     if (futureBarOpen) toggleFuture();
     previewCache.clear();
+    drawSandBase();
+    drawStarterPattern();
+    sandTexture.needsUpdate = true;
     tree = new B.TreeModel();
     Object.assign(res, { water: 72, mist: 60, food: 55, health: 82 });
     gp = 0; burnUntil = 0; soggy = 0; decals = []; decalsDirty = true; treeKey = '';
@@ -647,6 +780,17 @@
     if (env.kind === 'fog') mistIn += dtH * 8;
     res.mist = clamp(res.mist - dtH * (100 / 14) * env.mistMul + mistIn, 0, 100);
     res.food = clamp(res.food - dtH * (100 / 110), 0, 130);
+    if (env.raining && !off && sandCtx) {       // rain slowly smooths the raked sand
+      sandFade += dtH;
+      if (sandFade > 0.03) {
+        sandFade = 0;
+        sandCtx.globalAlpha = 0.05;
+        sandCtx.fillStyle = '#e3dabe';
+        sandCtx.fillRect(0, 0, SAND_TEX, SAND_TEX);
+        sandCtx.globalAlpha = 1;
+        sandTexture.needsUpdate = true;
+      }
+    }
     if (burnUntil && Date.now() > burnUntil) burnUntil = 0;
     if (soggy > 0) soggy = Math.max(0, soggy - dtH * 8);
 
@@ -704,6 +848,7 @@
       pan: Math.round(panY * 100) / 100,
       gp, burnUntil, soggy,
       decals: decals.slice(-48),
+      sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
       tree: tree.serialize(),
     }));
@@ -1086,7 +1231,7 @@
     if (previewTree) txt = `🔮 your bonsai after ${previewYears} years of loving care — press NOW to return`;
     else if (mode === 'prune') txt = '✂️ click a branch or blossom to cut — esc to exit';
     else if (mode === 'wire') txt = '➰ click a branch, drag to bend · dbl-click unwires · esc exits';
-    else txt = careNote() || (lastEnv && lastEnv.note) || 'drag the pot 🌀 · tap: blossoms=mist, air=water, pebbles=feed, branch=✂️➰';
+    else txt = careNote() || (lastEnv && lastEnv.note) || 'drag the pot 🌀 · rake the sand · tap: blossoms=mist, air=water, pebbles=feed, branch=✂️➰';
     if (statusEl.textContent !== txt) statusEl.textContent = txt;
   }
 
@@ -1176,6 +1321,15 @@
     try { setupScene(); } catch (e) {
       return fatal('😢 WebGL is unavailable in this browser, and the bonsai needs it to grow. (' + e.message + ')');
     }
+    if (data && typeof data.sand === 'string') {
+      const img = new Image();
+      img.onload = () => {
+        sandCtx.globalAlpha = 1;
+        sandCtx.drawImage(img, 0, 0, SAND_TEX, SAND_TEX);
+        sandTexture.needsUpdate = true;
+      };
+      img.src = data.sand;
+    }
     if (WALLPAPER) {
       document.documentElement.classList.add('wallpaper');
       applyViewport();
@@ -1203,6 +1357,12 @@
       project: projectTreePt,
       pick: pickAt,
       sceneAt: (x, y) => pickScene(x, y),
+      sandSum: () => {
+        const d = sandCtx.getImageData(0, 0, SAND_TEX, SAND_TEX).data;
+        let s = 0;
+        for (let i = 0; i < d.length; i += 97) s = (s + d[i]) % 1e9;
+        return s;
+      },
     };
     const hashFF = /ff=(\d+)/.exec(location.hash);   // #ff=N — dev: fast-forward N hours
     if (hashFF) simulate(parseInt(hashFF[1], 10) * 3600, { offline: false, fx: false });

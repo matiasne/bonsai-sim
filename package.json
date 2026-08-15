@@ -1,0 +1,13 @@
+{
+  "name": "bonsai-sim",
+  "version": "1.0.0",
+  "description": "Pixel Bonsai — 3D pixel-art bonsai care simulation",
+  "private": true,
+  "scripts": {
+    "test": "node test/smoke.js",
+    "e2e": "node test/e2e.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}

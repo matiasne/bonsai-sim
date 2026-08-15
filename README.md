@@ -24,6 +24,7 @@ npx serve .        # or: python3 -m http.server
 | **drag the pot / ← →** | grab the pot itself to spin the tree (background drags do nothing) |
 | **scroll / pinch / + −** | zoom in and out (buttons on the canvas, or the `+`/`-` keys) |
 | **drag ↕ / ↑ ↓ keys** | when zoomed in, move the view up and down; zooming out re-centers |
+| **〰️ rake the sand** | the pot sits in a zen sand tray — drag across it to rake patterns (tap = dimple; rain slowly smooths them; patterns rotate with the pot and are saved) |
 | 🔮 **FUTURE** | preview your bonsai after **2–9 years** of good care — a deterministic vision grown from your exact tree (older visions: denser canopy, stockier trunk); nothing changes until you return to NOW |
 | 💧 **WATER** | soil moisture — drains faster on hot, dry days (shortcut: **tap the open air** above/beside the tree) |
 | 🌫 **MIST** | leaf humidity — nice-to-have, the tree loves it (shortcut: **tap the blossoms**) |
