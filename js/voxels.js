@@ -13,7 +13,7 @@
   }
 
   const PAL = {
-    trunk: ['#7d5b41', '#5f4330', '#4a3323', '#38251a'],
+    trunk: ['#8a684a', '#66492f', '#4c3524', '#372218'],
     leaf: ['#f7c9d6', '#f1a7bf', '#e287a6', '#c9688e'],
     leafDull: ['#d9c3a8', '#c4a98a', '#a98d6f', '#8a7057'],
     leafFrostTop: '#eef3f7',
@@ -76,6 +76,75 @@
     return out;
   }
 
+  // Baked key light for wood shading (tree-local, upper front-left) — gives the
+  // bark a lit side and a shadow side like classic voxel art.
+  const WOOD_LIGHT = (() => {
+    const l = Math.hypot(-0.55, 0.35, 0.8);
+    return [-0.55 / l, 0.35 / l, 0.8 / l];
+  })();
+
+  function woodShade(nx, ny, nz, wx, wy, wz) {
+    const dl = nx * WOOD_LIGHT[0] + ny * WOOD_LIGHT[1] + nz * WOOD_LIGHT[2];
+    let ci = dl > 0.4 ? 0 : dl > -0.1 ? 1 : dl > -0.55 ? 2 : 3;
+    // coarse patch variation (quantized lattice — no per-step striping)
+    const hp = hash3(Math.round(wx / 2.5), Math.round(wy / 2.5), Math.round(wz / 2.5));
+    if (hp > 0.88 && ci < 3) ci++;
+    else if (hp < 0.1 && ci > 0) ci--;
+    return ci;
+  }
+
+  // One branch cross-section: a disc of small voxels perpendicular to the axis,
+  // shaded by the surface normal, with vertical bark-fissure streaks.
+  function emitWood(out, s, px, py, pz, r, u, v, cutFace) {
+    if (r < 1.05) {                            // thin twig: single chunky voxel
+      const hp = hash3(Math.round(px / 2.5), Math.round(py / 2.5), Math.round(pz / 2.5));
+      const ci = cutFace ? 3 : hp > 0.8 ? 0 : hp < 0.25 ? 2 : 1;
+      out.push({ x: px, y: py + GEO.soilY, z: pz, s: Math.max(1, r * 2), ci, kind: 'wood', seg: s.id });
+      return;
+    }
+    const step = 1.15, n = Math.ceil(r / step);
+    for (let a = -n; a <= n; a++) {
+      for (let b = -n; b <= n; b++) {
+        const ox = a * step, oz = b * step;
+        const d2 = ox * ox + oz * oz;
+        if (d2 > r * r + 0.25) continue;
+        const wx = px + u[0] * ox + v[0] * oz;
+        const wy = py + u[1] * ox + v[1] * oz;
+        const wz = pz + u[2] * ox + v[2] * oz;
+        if (r > 2 && d2 < (r - 1.25) * (r - 1.25) && hash3(wx, wy, wz) < 0.85) continue; // hollow core
+        let ci;
+        if (cutFace) ci = 3;
+        else {
+          const inv = d2 > 0.01 ? 1 / Math.sqrt(d2) : 0;
+          ci = woodShade(
+            (u[0] * ox + v[0] * oz) * inv, (u[1] * ox + v[1] * oz) * inv, (u[2] * ox + v[2] * oz) * inv,
+            wx, wy, wz
+          );
+          const sector = ((Math.atan2(b, a) / (Math.PI * 2) + 0.5) * 8) | 0;
+          if (hash3(s.id * 13, sector * 7, 3) < 0.22 && ci < 3) ci++;   // fissure streak
+        }
+        out.push({ x: wx, y: wy + GEO.soilY, z: wz, s: 1.35, ci, kind: 'wood', seg: s.id });
+      }
+    }
+  }
+
+  // Rounded collar at an angled joint so elbows have no notches.
+  function emitKnob(out, s, c, rc) {
+    const R = Math.ceil(rc);
+    for (let dx = -R; dx <= R; dx++) {
+      for (let dy = -R; dy <= R; dy++) {
+        for (let dz = -R; dz <= R; dz++) {
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > rc * rc + 0.3) continue;
+          if (rc > 1.8 && d2 < (rc - 1.2) * (rc - 1.2)) continue;      // shell only
+          const inv = d2 > 0.01 ? 1 / Math.sqrt(d2) : 0;
+          const ci = woodShade(dx * inv, dy * inv, dz * inv, c[0] + dx, c[1] + dy, c[2] + dz);
+          out.push({ x: c[0] + dx, y: c[1] + dy + GEO.soilY, z: c[2] + dz, s: 1.2, ci, kind: 'wood', seg: s.id });
+        }
+      }
+    }
+  }
+
   // puffScale shrinks blossoms (wire mode needs clickable wood).
   function buildTree(model, opts) {
     opts = opts || {};
@@ -88,17 +157,23 @@
       const childTh = s.children.length
         ? Math.max.apply(null, s.children.map(c => c.thick))
         : Math.max(0.9, s.thick * 0.6);
-      const steps = Math.max(2, Math.ceil(s.len / 0.6));
+      let wu = Vv.cross(s.dir, Math.abs(s.dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
+      wu = Vv.norm(wu);
+      const wv = Vv.norm(Vv.cross(s.dir, wu));
+      const steps = Math.max(2, Math.ceil(s.len / 0.7));
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
         const px = s.start[0] + s.dir[0] * s.len * t;
         const py = s.start[1] + s.dir[1] * s.len * t;
         const pz = s.start[2] + s.dir[2] * s.len * t;
-        const th = Math.max(1, s.thick * (1 - t) + childTh * t);
-        const h = hash3(px, py, pz);
-        let ci = h < 0.12 ? 0 : h < 0.5 ? 1 : h < 0.92 ? 2 : 3;
-        if (s.cut && i === steps) ci = 3;                       // dark cut face on stubs
-        out.push({ x: px, y: py + GEO.soilY, z: pz, s: th, ci, kind: 'wood', seg: s.id });
+        const r = Math.max(0.55, (s.thick * (1 - t) + childTh * t) / 2);
+        emitWood(out, s, px, py, pz, r, wu, wv, s.cut && i === steps);
+      }
+      if (s.pid !== null) {                     // collar knob fills angled joints
+        const par = model.segs.get(s.pid);
+        if (par && Vv.dot(par.dir, s.dir) < 0.92) {
+          emitKnob(out, s, s.start, Math.max(par.thick, s.thick) / 2);
+        }
       }
       if (s.wired) {
         let perp = Vv.cross(s.dir, Math.abs(s.dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
@@ -125,7 +200,7 @@
     // blossom puffs: flattened ellipsoids, hollow core, hash-fluffed edges
     const canopy = { sx: 0, sy: 0, sz: 0, n: 0, minX: 0, maxX: 0, maxY: GEO.soilY, minY: 999 };
     for (const s of segs) {
-      if (out.length > 30000) break;
+      if (out.length > 38000) break;
       const r0 = model.leafRadius(s);
       if (r0 < 1.2) continue;
       const r = Math.max(1.2, r0 * puffScale);

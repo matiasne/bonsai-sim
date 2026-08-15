@@ -114,7 +114,7 @@ const pot = B.Voxels.buildPot();
 ok(pot.length > 400 && pot.length < 4096, `pot voxels: ${pot.length}`);
 ok(pot.some(v => v.kind === 'pebble'), 'pot has pebbles');
 const built = B.Voxels.buildTree(t2);
-ok(built.voxels.length > 300 && built.voxels.length < 16384, `tree voxels: ${built.voxels.length}`);
+ok(built.voxels.length > 300 && built.voxels.length < 40960, `tree voxels: ${built.voxels.length}`);
 ok(built.voxels.some(v => v.kind === 'leaf'), 'tree has blossom voxels');
 ok(built.canopy.maxY > built.canopy.minY, 'canopy bounds sane');
 const shrunk = B.Voxels.buildTree(t2, { puffScale: 0.6 });
@@ -142,7 +142,7 @@ ok([...f4.segs.values()].every(s => !s.wired), 'future visions carry no wire (lo
 const f2b = B.growFuture(baseSer, 2);
 ok(JSON.stringify(f2b.serialize()) === JSON.stringify(f2.serialize()), 'future previews are deterministic');
 const futVox = B.Voxels.buildTree(f4).voxels.length;
-ok(futVox < 32768, `+4y voxels fit instanced-mesh capacity (${futVox})`);
+ok(futVox < 40960, `+4y voxels fit instanced-mesh capacity (${futVox})`);
 for (const s of f4.segs.values()) ok2NoNaN(s);
 console.log('  ✓ +4y tree has no NaN');
 passed++;
@@ -154,7 +154,7 @@ ok(f9.stats().tips > f4.stats().tips, `+9y fuller than +4y (tips ${f4.stats().ti
 ok(f9.stats().segments <= B.TreeCFG.maxSegments + 9 * 3 * 6, '+9y respects boosted segment cap');
 ok(f9.stats().width <= 2 * (B.TreeCFG.maxRadius + 10), '+9y still fits the viewport');
 const f9vox = B.Voxels.buildTree(f9).voxels.length;
-ok(f9vox < 32768, `+9y voxels fit capacity (${f9vox}, grown in ${ms9}ms)`);
+ok(f9vox < 40960, `+9y voxels fit capacity (${f9vox}, grown in ${ms9}ms)`);
 ok(ms9 < 3000, `+9y preview computes fast enough (${ms9}ms)`);
 const maxThick9 = Math.max(...[...f9.segs.values()].map(s => s.thick));
 const maxThick2 = Math.max(...[...f2.segs.values()].map(s => s.thick));

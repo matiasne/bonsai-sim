@@ -106,7 +106,7 @@
     scene.add(rotGroup);
 
     potMesh = makeInstMesh(4096);
-    treeMesh = makeInstMesh(32768);
+    treeMesh = makeInstMesh(40960);
     decalMesh = makeInstMesh(64);
     rotGroup.add(potMesh, treeMesh, decalMesh);
 
