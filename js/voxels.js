@@ -20,7 +20,7 @@
     pot: ['#7fa3bd', '#31465c', '#263a4d', '#17242f'],
     pebble: ['#f2efe6', '#dedacb', '#c4bfae'],
     pebbleWet: ['#d8d4c6', '#beb9a9', '#a29d8d'],
-    wire: ['#a8adb5', '#7b8087'],
+    wire: ['#e0a468', '#b0713c', '#7a4a26'],   // anodized copper, lit → shadow
     decalPetal: '#f1a7bf',
     decalPellet: '#e3cf6b',
     decalPelletOld: '#b7a552',
@@ -176,23 +176,28 @@
         }
       }
       if (s.wired) {
+        // continuous copper coil: sampled along the helix ARC (not the axis) so the
+        // band is unbroken, hugging just outside the voxel bark, ~45° wrap pitch,
+        // shaded by the same key light as the wood.
         let perp = Vv.cross(s.dir, Math.abs(s.dir[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0]);
         const u = Vv.norm(perp), v = Vv.norm(Vv.cross(s.dir, u));
-        const rr = Math.max(1, s.thick) / 2 + 0.55;
-        const wsteps = Math.max(6, Math.ceil(s.len / 0.45));
-        const turns = Math.max(2, s.len * 0.5);
+        const rMid = Math.max(1, (s.thick + childTh) / 2) / 2 + 0.55;
+        const turns = Math.max(2, s.len / (rMid * 1.3));
+        const arc = Math.sqrt(s.len * s.len + Math.pow(turns * Math.PI * 2 * rMid, 2));
+        const wsteps = Math.max(12, Math.ceil(arc / 0.4));
         for (let i = 0; i <= wsteps; i++) {
           const t = i / wsteps, a = t * turns * Math.PI * 2;
-          const ox = (Math.cos(a) * u[0] + Math.sin(a) * v[0]) * rr;
-          const oy = (Math.cos(a) * u[1] + Math.sin(a) * v[1]) * rr;
-          const oz = (Math.cos(a) * u[2] + Math.sin(a) * v[2]) * rr;
-          const px = s.start[0] + s.dir[0] * s.len * t + ox;
-          const py = s.start[1] + s.dir[1] * s.len * t + oy;
-          const pz = s.start[2] + s.dir[2] * s.len * t + oz;
-          out.push({
-            x: px, y: py + GEO.soilY, z: pz, s: 0.8,
-            ci: hash3(px, py, pz) < 0.6 ? 0 : 1, kind: 'wire', seg: s.id,
-          });
+          const rr = Math.max(1, s.thick * (1 - t) + childTh * t) / 2 + 0.55; // hug the taper
+          const nx = Math.cos(a) * u[0] + Math.sin(a) * v[0];
+          const ny = Math.cos(a) * u[1] + Math.sin(a) * v[1];
+          const nz = Math.cos(a) * u[2] + Math.sin(a) * v[2];
+          const px = s.start[0] + s.dir[0] * s.len * t + nx * rr;
+          const py = s.start[1] + s.dir[1] * s.len * t + ny * rr;
+          const pz = s.start[2] + s.dir[2] * s.len * t + nz * rr;
+          const dl = nx * WOOD_LIGHT[0] + ny * WOOD_LIGHT[1] + nz * WOOD_LIGHT[2];
+          let ci = dl > 0.5 ? 0 : dl > -0.25 ? 1 : 2;
+          if (hash3(px, py, pz) > 0.94) ci = 0;              // metallic glint
+          out.push({ x: px, y: py + GEO.soilY, z: pz, s: 0.7, ci, kind: 'wire', seg: s.id });
         }
       }
     }
