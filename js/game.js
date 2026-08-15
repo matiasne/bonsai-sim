@@ -6,11 +6,14 @@
   const PAL = B.Voxels.PAL;
 
   // ---------- constants
-  const BUF = 176;                  // backbuffer pixels (CSS scales it up, pixelated)
-  const HALF = 44;                  // ortho half-width in world units → 2 buffer px per voxel
+  const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
+  const BUFH = 176;                 // backbuffer height (fixed pixel scale; CSS upscales)
+  let BUFW = 176;                   // width follows the screen in wallpaper mode
+  let aspect = 1;
+  const HALF = 44;                  // ortho half-HEIGHT in world units → 2 buffer px per voxel
   const LOOK_Y = 31;
   const ELEV = 0.165;               // camera elevation (rad)
-  const PX_PER_UNIT = BUF / (2 * HALF);
+  const PX_PER_UNIT = BUFH / (2 * HALF);
   const KEY = 'pixel-bonsai-v1';
   const SLOP = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
 
@@ -69,7 +72,7 @@
   let decals = [], decalsDirty = true;
   let lastEnv = null, statsCache = null;
   let lastTick = Date.now(), lastSaveAt = Date.now();
-  let drag = null;
+  let drag = null, lastInteract = 0;
   const fxRng = B.makeRng((Math.random() * 0xffffffff) >>> 0);
 
   // ---------- Three.js scene
@@ -92,8 +95,9 @@
     m4 = new THREE.Matrix4(); q4 = new THREE.Quaternion(); v3 = new THREE.Vector3();
     sc3 = new THREE.Vector3(); col = new THREE.Color();
 
+    if (WALLPAPER) aspect = Math.min(3.4, Math.max(0.5, window.innerWidth / Math.max(1, window.innerHeight)));
     renderer = new THREE.WebGLRenderer({ canvas: view, antialias: false });
-    renderer.setSize(BUF, BUF, false);
+    renderer.setSize(BUFW, BUFH, false);
     renderer.setClearColor(0xf4f1ea);
 
     scene = new THREE.Scene();
@@ -123,7 +127,7 @@
     const starPos = [];
     for (let i = 0; i < 42; i++) {
       starPos.push(
-        (B.Voxels.hash3(i, 7, 1) - 0.5) * 2 * (HALF - 4),
+        (B.Voxels.hash3(i, 7, 1) - 0.5) * 2 * (HALF * aspect - 4),
         14 + B.Voxels.hash3(i, 13, 5) * 54,
         -80
       );
@@ -208,17 +212,31 @@
     v3.set(p[0], p[1] + GEO.soilY, p[2]);
     rotGroup.localToWorld(v3);
     v3.project(camera);
-    return { x: (v3.x * 0.5 + 0.5) * BUF, y: (-v3.y * 0.5 + 0.5) * BUF };
+    return { x: (v3.x * 0.5 + 0.5) * BUFW, y: (-v3.y * 0.5 + 0.5) * BUFH };
   }
   function projectLocalPt(x, y, z) { // rotGroup-space point → backbuffer px
     scene.updateMatrixWorld();
     v3.set(x, y, z);
     rotGroup.localToWorld(v3);
     v3.project(camera);
-    return { x: (v3.x * 0.5 + 0.5) * BUF, y: (-v3.y * 0.5 + 0.5) * BUF };
+    return { x: (v3.x * 0.5 + 0.5) * BUFW, y: (-v3.y * 0.5 + 0.5) * BUFH };
   }
 
   let ray = null;
+
+  // Wallpaper mode: the backbuffer width tracks the screen's aspect so the scene
+  // fills any monitor without distortion (height stays 176 → same pixel scale).
+  function applyViewport() {
+    if (!WALLPAPER) return;
+    aspect = Math.min(3.4, Math.max(0.5, window.innerWidth / Math.max(1, window.innerHeight)));
+    BUFW = Math.round(BUFH * aspect);
+    renderer.setSize(BUFW, BUFH, false);
+    fxCanvas.width = BUFW;
+    fxCanvas.height = BUFH;
+    camera.left = -HALF * aspect;
+    camera.right = HALF * aspect;
+    camera.updateProjectionMatrix();
+  }
 
   function applyZoom(z) {
     zoom = clamp(z, 0.6, 3.2);
@@ -246,8 +264,8 @@
     const bx = (clientX - rect.left) / rect.width;
     const by = (clientY - rect.top) / rect.height;
     for (const [ox, oy] of SLOP) {
-      const nx = (bx + ox / BUF) * 2 - 1;
-      const ny = -((by + oy / BUF) * 2 - 1);
+      const nx = (bx + ox / BUFW) * 2 - 1;
+      const ny = -((by + oy / BUFH) * 2 - 1);
       ray.setFromCamera({ x: nx, y: ny }, camera);
       const hits = ray.intersectObjects([treeMesh, potMesh]);
       for (const h of hits) {
@@ -299,11 +317,13 @@
 
     view.addEventListener('wheel', (e) => {
       e.preventDefault();
+      lastInteract = performance.now();
       applyZoom(zoom * Math.exp(-e.deltaY * 0.0016));
     }, { passive: false });
 
     view.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 && e.pointerType === 'mouse') return;
+      lastInteract = performance.now();
       view.setPointerCapture(e.pointerId);
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) { drag = { type: 'pinch', d: touchDist() }; return; }
@@ -384,7 +404,7 @@
       }
       if (drag.type === 'bend') {
         const rect = view.getBoundingClientRect();
-        const k = BUF / rect.width;
+        const k = BUFW / rect.width;
         const dx = (e.clientX - drag.lastX) * k;
         const dy = (e.clientY - drag.lastY) * k;
         drag.lastX = e.clientX; drag.lastY = e.clientY;
@@ -437,6 +457,7 @@
 
     window.addEventListener('keydown', (e) => {
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      lastInteract = performance.now();
       if (e.key === 'ArrowLeft') { thetaVel = 0; theta -= 0.09; }
       else if (e.key === 'ArrowRight') { thetaVel = 0; theta += 0.09; }
       else if (e.key === 'ArrowUp') applyPan(panY + 3);
@@ -693,7 +714,7 @@
   function addPart(p) { if (parts.length < 420) parts.push(p); }
 
   function canopyScreen() {
-    if (!canopy) return { x: BUF / 2, y: BUF / 2 - 20, w: 40, h: 30 };
+    if (!canopy) return { x: BUFW / 2, y: BUFH / 2 - 20, w: 40, h: 30 };
     const c = projectLocalPt(canopy.x, canopy.y, canopy.z);
     return {
       x: c.x, y: c.y,
@@ -727,7 +748,7 @@
     const fy = floorScreenY();
     for (let i = 0; i < 7; i++) {
       addPart({
-        kind: 'pellet', x: BUF / 2 + 30 + fxRng.next() * 10, y: fy - 55 - fxRng.next() * 10,
+        kind: 'pellet', x: BUFW / 2 + 30 + fxRng.next() * 10, y: fy - 55 - fxRng.next() * 10,
         vx: -26 - fxRng.next() * 22, vy: -12 + fxRng.next() * 8, g: 150, floor: fy - 2 + fxRng.next() * 4,
         ttl: 3, t: 0, c: PAL.decalPellet, w: 2, h: 2,
       });
@@ -754,18 +775,18 @@
   }
 
   function fxFrame(dt, tms) {
-    fxCtx.clearRect(0, 0, BUF, BUF);
+    fxCtx.clearRect(0, 0, BUFW, BUFH);
     const env = lastEnv;
     const fy = floorScreenY();
 
     if (env && env.raining) {
       const n = env.kind === 'storm' ? 3 : 2;
       for (let i = 0; i < n; i++) {
-        addPart({ kind: 'rain', x: fxRng.next() * BUF, y: -4, vx: -env.wind * 0.25, vy: 150 + fxRng.next() * 60, ttl: 2, t: 0, c: '#8fb4d9', w: 1, h: 3, floor: fy + (fxRng.next() - 0.5) * 8 });
+        addPart({ kind: 'rain', x: fxRng.next() * BUFW, y: -4, vx: -env.wind * 0.25, vy: 150 + fxRng.next() * 60, ttl: 2, t: 0, c: '#8fb4d9', w: 1, h: 3, floor: fy + (fxRng.next() - 0.5) * 8 });
       }
     }
     if (env && env.snowing && fxRng.next() < 0.5) {
-      addPart({ kind: 'snow', x: fxRng.next() * BUF, y: -3, vx: 0, vy: 14 + fxRng.next() * 8, ttl: 14, t: 0, c: '#ffffff', w: 2, h: 2, drift: fxRng.next() * 6.3 });
+      addPart({ kind: 'snow', x: fxRng.next() * BUFW, y: -3, vx: 0, vy: 14 + fxRng.next() * 8, ttl: 14, t: 0, c: '#ffffff', w: 2, h: 2, drift: fxRng.next() * 6.3 });
     }
     if (env && res.health > 60 && canopy && fxRng.next() < 0.006 + env.wind * 0.0006) {
       const c = canopyScreen();
@@ -1043,6 +1064,7 @@
       thetaVel *= 0.93;
       if (Math.abs(thetaVel) < 0.0001) thetaVel = 0;
     }
+    if (WALLPAPER && !drag && tms - lastInteract > 30000) theta += dt * 0.02;  // idle: slow turntable
     rotGroup.rotation.y = theta;
     const swayA = lastEnv ? lastEnv.sway : 0.3;
     treeMesh.rotation.z = Math.sin(tms / 625) * 0.012 * swayA;
@@ -1079,6 +1101,16 @@
 
     try { setupScene(); } catch (e) {
       return fatal('😢 WebGL is unavailable in this browser, and the bonsai needs it to grow. (' + e.message + ')');
+    }
+    if (WALLPAPER) {
+      document.documentElement.classList.add('wallpaper');
+      applyViewport();
+      let rt;
+      window.addEventListener('resize', () => {
+        clearTimeout(rt);
+        rt = setTimeout(() => { applyViewport(); applyZoom(zoom); }, 200);
+      });
+      lastInteract = performance.now();
     }
     applyZoom(data && typeof data.zoom === 'number' ? data.zoom : 1);
     applyPan(data && typeof data.pan === 'number' ? data.pan : 0);

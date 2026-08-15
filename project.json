@@ -1,0 +1,12 @@
+{
+  "contentrating": "Everyone",
+  "description": "A living pixel-art bonsai that grows in real time with your real weather. Drag the pot to rotate, tap the blossoms to mist, the air to water, the pebbles to feed.",
+  "file": "wallpaper.html",
+  "general": {
+    "properties": {}
+  },
+  "tags": ["Pixel art", "Nature", "Relaxing"],
+  "title": "Pixel Bonsai",
+  "type": "web",
+  "visibility": "private"
+}

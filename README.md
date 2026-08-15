@@ -33,6 +33,27 @@ npx serve .        # or: python3 -m http.server
 | ⏩ | time-lapse one hour |
 | ⚙ | set your city (weather), start a new tree |
 
+## Use it as a desktop wallpaper 🖼
+
+Open **`wallpaper.html`** instead of `index.html` and you get just the living scene, edge to edge —
+no buttons, widescreen-aware, slowly rotating when idle. The tree keeps growing, real weather keeps
+working, and progress saves inside the wallpaper app.
+
+**Windows — Wallpaper Engine** (Steam): copy this whole folder into
+`...\steamapps\common\wallpaper_engine\projects\myprojects\bonsai-sim` — it ships a `project.json`,
+so it appears under *Installed*. (Or: Wallpaper Editor → *Create Wallpaper* → pick `wallpaper.html`.)
+Enable mouse input in the wallpaper's settings to interact with the tree.
+
+**Windows — Lively Wallpaper** (free, Microsoft Store): drag `wallpaper.html` onto the Lively window
+(or *Add Wallpaper* → *Browse*). A `LivelyInfo.json` is included for folder imports.
+
+**macOS — Plash** (free, App Store): Plash → *Add Website* → paste the file URL
+(`file:///path/to/bonsai-sim/wallpaper.html`) and grant folder access. Turn on *Browsing Mode*
+whenever you want to water/prune/rotate; turn it off to click through to your desktop.
+
+Notes: each wallpaper app has its own browser storage, so the wallpaper keeps **its own bonsai**
+(separate from your browser's). Everything works offline except the first three.js load and weather.
+
 ## Real time & weather
 
 - Location: silent IP lookup → or search your city → or 📍 precise geolocation.

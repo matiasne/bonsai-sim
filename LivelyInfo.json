@@ -1,0 +1,12 @@
+{
+  "AppVersion": "1.0.0.0",
+  "Title": "Pixel Bonsai",
+  "Desc": "A living pixel-art bonsai that grows in real time with your real weather.",
+  "Author": "matiasne",
+  "License": "",
+  "Website": "https://github.com/matiasne/bonsai-sim",
+  "Type": 1,
+  "FileName": "wallpaper.html",
+  "Arguments": "",
+  "IsAbsolutePath": false
+}
