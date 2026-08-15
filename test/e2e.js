@@ -46,9 +46,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // --- rotation: only the pot is a rotate handle
   const rect = await page.evaluate(() => {
     const r = document.querySelector('#view').getBoundingClientRect();
-    return { left: r.left, top: r.top, w: r.width, h: r.height };
+    return { left: r.left, top: r.top, w: r.width, h: r.height, bw: document.querySelector('#view').width };
   });
-  const toCss = (p) => ({ x: rect.left + (p.x / 176) * rect.w, y: rect.top + (p.y / 176) * rect.h });
+  const toCss = (p) => ({ x: rect.left + (p.x / rect.bw) * rect.w, y: rect.top + (p.y / rect.bw) * rect.h });
   const th0 = await page.evaluate(() => __bonsai.theta);
   const potPt = toCss(await page.evaluate(() => __bonsai.projectLocal(0, 5, 0)));
   await page.mouse.move(potPt.x, potPt.y);
@@ -97,7 +97,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     for (const s of t.segs.values()) {
       if (s.children.length || t.leafRadius(s) < 2.3) continue;
       const p = __bonsai.project(s.end);
-      const cx = r.left + (p.x / 176) * r.width, cy = r.top + (p.y / 176) * r.height;
+      const vw = document.querySelector('#view').width;
+      const cx = r.left + (p.x / vw) * r.width, cy = r.top + (p.y / vw) * r.height;
       const hit = __bonsai.pick(cx, cy);
       if (hit && hit.kind === 'leaf') return { x: cx, y: cy, id: hit.segId };
     }
@@ -290,7 +291,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       if (s.pid === null || s.cut || s.order < 1 || s.thick > 5) continue;
       const mid = [(s.start[0] + s.end[0]) / 2, (s.start[1] + s.end[1]) / 2, (s.start[2] + s.end[2]) / 2];
       const p = __bonsai.project(mid);
-      const cx = r.left + (p.x / 176) * r.width, cy = r.top + (p.y / 176) * r.height;
+      const vw = document.querySelector('#view').width;
+      const cx = r.left + (p.x / vw) * r.width, cy = r.top + (p.y / vw) * r.height;
       const hit = __bonsai.pick(cx, cy);
       if (hit && (hit.kind === 'wood' || hit.kind === 'wire') && hit.segId === s.id) return { x: cx, y: cy, id: s.id };
     }
@@ -353,7 +355,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     for (const s of t.segs.values()) {
       if (s.children.length || s.cut || t.leafRadius(s) < 2.5) continue;
       const p = __bonsai.project(s.end);
-      const cx = r.left + (p.x / 176) * r.width, cy = r.top + (p.y / 176) * r.height;
+      const vw = document.querySelector('#view').width;
+      const cx = r.left + (p.x / vw) * r.width, cy = r.top + (p.y / vw) * r.height;
       const hit = __bonsai.pick(cx, cy);
       if (hit && hit.kind === 'leaf' && hit.segId === s.id) {
         return { x: cx, y: cy, id: s.id, r: t.leafRadius(s), bb: s.budBoost };
@@ -531,8 +534,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   });
   check(!!target, 'found a blossom tip to prune');
   if (target) {
-    const cx = rect.left + (target.x / 176) * rect.w;
-    const cy = rect.top + (target.y / 176) * rect.h;
+    const cx = rect.left + (target.x / rect.bw) * rect.w;
+    const cy = rect.top + (target.y / rect.bw) * rect.h;
     const picked = await page.evaluate((px, py) => __bonsai.pick(px, py), cx, cy);
     check(picked && picked.segId !== undefined, `raycast pick hit seg ${picked && picked.segId} (aimed at ${target.id})`);
     await page.mouse.click(cx, cy);
@@ -573,7 +576,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     for (const s of cands) {   // pick-validated: the click must land on THIS branch
       const mid = [(s.start[0] + s.end[0]) / 2, (s.start[1] + s.end[1]) / 2, (s.start[2] + s.end[2]) / 2];
       const p = __bonsai.project(mid);
-      const cx = r.left + (p.x / 176) * r.width, cy = r.top + (p.y / 176) * r.height;
+      const vw = document.querySelector('#view').width;
+      const cx = r.left + (p.x / vw) * r.width, cy = r.top + (p.y / vw) * r.height;
       const hit = __bonsai.pick(cx, cy);
       if (hit && hit.segId === s.id) return { x: cx, y: cy, id: s.id, dir: s.dir.slice() };
     }
@@ -698,11 +702,17 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.click('#zoom-in');
   await sleep(120);
 
-  // --- pixel density button: same view, more pixels
+  // --- pixel density button: 2× is the default; the button cycles the scales
+  const resDef = await page.evaluate(() => ({ bufH: __bonsai.pix.bufH, w: document.querySelector('#view').width, label: document.querySelector('#btn-res').textContent }));
+  check(resDef.bufH === 352 && resDef.w === 352 && resDef.label === '2×', `pixel density defaults to 2× (${resDef.w}px)`);
+  await page.click('#btn-res');
+  await sleep(250);
+  const res1 = await page.evaluate(() => __bonsai.pix.bufH);
+  check(res1 === 176, '▦ cycles down to chunky 1×');
   await page.click('#btn-res');
   await sleep(250);
   const res15 = await page.evaluate(() => ({ bufH: __bonsai.pix.bufH, w: document.querySelector('#view').width }));
-  check(res15.bufH === 264 && res15.w === 264, `▦ raises the backbuffer to 1.5× (${res15.w}px)`);
+  check(res15.bufH === 264 && res15.w === 264, `▦ cycles to 1.5× (${res15.w}px)`);
   const potAtRes = await page.evaluate(() => {
     const v = document.querySelector('#view');
     const r = v.getBoundingClientRect();
@@ -711,12 +721,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     return s && s.target;
   });
   check(potAtRes === 'pot' || potAtRes === 'pebble', `picking stays aligned at higher density (${potAtRes})`);
-  await page.click('#btn-res');
+  await page.click('#btn-res');   // back to the 2× default for the rest of the suite
   await sleep(250);
   const res2 = await page.evaluate(() => __bonsai.pix.bufH);
-  check(res2 === 352, '▦ cycles to 2×');
-  await page.click('#btn-res');   // back to 1× for the rest of the suite
-  await sleep(250);
+  check(res2 === 352, '▦ cycles back to the 2× default');
 
   // --- four seasons (via the override)
   await page.evaluate(() => { __bonsai.res.health = 80; });
@@ -789,8 +797,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     cssW: document.querySelector('#view').getBoundingClientRect().width,
   }));
   check(wpState.cls && wpState.headerHidden && wpState.actionsHidden, 'wallpaper mode hides the UI chrome');
-  check(wpState.bufH === 176 && wpState.bufW >= 300 && wpState.bufW <= 330,
-    `wallpaper buffer follows the screen aspect (${wpState.bufW}×${wpState.bufH})`);
+  check(wpState.bufH === 352 && wpState.bufW >= 600 && wpState.bufW <= 660,
+    `wallpaper buffer follows the screen aspect at 2× (${wpState.bufW}×${wpState.bufH})`);
   check(Math.abs(wpState.cssW - 1600) < 4, `scene fills the screen edge to edge (${Math.round(wpState.cssW)}px)`);
 
   const wpBranch = await wp.evaluate(() => {

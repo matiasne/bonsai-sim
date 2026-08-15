@@ -1113,7 +1113,7 @@
     store.set(KEY, JSON.stringify({
       v: 1, ts: Date.now(),
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
-      pan: Math.round(panY * 100) / 100, pix: resIdx,
+      pan: Math.round(panY * 100) / 100, pix2: resIdx,
       gp, burnUntil, soggy, trim: Math.round(trimBoost * 100) / 100,
       dying: Math.round(dyingH * 10) / 10,
       decals: decals.slice(-48),
@@ -1654,7 +1654,7 @@
     }
     applyZoom(data && typeof data.zoom === 'number' ? data.zoom : 1);
     applyPan(data && typeof data.pan === 'number' ? data.pan : 0);
-    applyRes(data && typeof data.pix === 'number' ? data.pix : 0);
+    applyRes(data && typeof data.pix2 === 'number' ? data.pix2 : 2);
 
     window.__bonsai = {
       tree, res, simulate, setPreview, toggleFuture, applyZoom,
