@@ -177,6 +177,18 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       } else {
         check(true, 'no third blossom for the consecutive-tap check — skipped');
       }
+      // no blink: the button stays visible even while the next tap is pressed down
+      const b4 = await findBlossom();
+      if (b4) {
+        await page.mouse.move(b4.x, b4.y);
+        await page.mouse.down();
+        const duringPress = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+        await page.mouse.up();
+        await sleep(200);
+        check(duringPress, 'the TRIM button does not blink between pad taps');
+      } else {
+        check(true, 'no blossom for the blink check — skipped');
+      }
       await sleep(5300);
       const openLater = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
       check(!openLater, 'the TRIM option disappears by itself after 5 seconds');

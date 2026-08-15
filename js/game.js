@@ -480,7 +480,7 @@
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) { drag = { type: 'pinch', d: touchDist() }; return; }
       const menuWasOpen = branchMenuSeg !== null;   // dismissal swallows only background taps
-      if (menuWasOpen) closeBranchMenu();
+      if (menuWasOpen && mode !== 'view') closeBranchMenu();
       const start = { x: e.clientX, y: e.clientY };
       if (mode === 'prune') {
         const hit = pickAt(e.clientX, e.clientY);
@@ -506,6 +506,12 @@
       // the scene is the interface: pot = rotate handle, pebbles = feed,
       // blossoms = mist, open air (outside the branches / above) = water
       const s = pickScene(e.clientX, e.clientY);
+      if (menuWasOpen && mode === 'view') {
+        // taps heading toward a pad/branch retarget the menu in place (no blink);
+        // anything else dismisses it right away
+        const keeps = s && (s.target === 'leaf' || s.target === 'wood' || s.target === 'wire');
+        if (!keeps) closeBranchMenu();
+      }
       if (s && (s.target === 'pot' || s.target === 'pebble')) {
         drag = { type: 'rotate', lastX: e.clientX, lastY: e.clientY, moved: 0, tap: s.target };
       } else if (mode === 'view') {
