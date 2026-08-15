@@ -50,6 +50,7 @@
     maxOrder: 4,
     maxHeight: 44,   // tree-space units above the soil line (y=0)
     maxRadius: 24,   // horizontal spread cap so the canopy fits the viewport
+    maxRunLen: 13,   // a chain must fork within this distance — no bare runaway whips
     growStep: 1.0,
     branchProb: 0.34,
     minBendY: 1.5,   // bends may not push any joint below this
@@ -73,7 +74,7 @@
         id: this.nextId++, pid: parent ? parent.id : null,
         dir: V.norm(dir), len, maxLen, order,
         wired: false, wireAge: 0, cut: false, tipAge: 0, budBoost: 0,
-        children: [], start: [0, 0, 0], end: [0, 0, 0], thick: 1, tipCount: 1,
+        children: [], start: [0, 0, 0], end: [0, 0, 0], thick: 1, tipCount: 1, runLen: 0,
       };
       this.segs.set(s.id, s);
       return s;
@@ -111,10 +112,14 @@
       }
       const rootSeg = this.root();
       if (!rootSeg) return;
+      rootSeg.runLen = 0;
       const walk = (s, start) => {
         s.start = start;
         s.end = [start[0] + s.dir[0] * s.len, start[1] + s.dir[1] * s.len, start[2] + s.dir[2] * s.len];
-        for (const c of s.children) walk(c, s.end);
+        for (const c of s.children) {
+          c.runLen = s.children.length >= 2 ? 0 : s.runLen + s.len;   // forks reset the chain
+          walk(c, s.end);
+        }
       };
       walk(rootSeg, [0, 0, 0]);
       const count = (s) => {
@@ -202,6 +207,13 @@
       const er = Math.hypot(s.end[0], s.end[2]);
       if (er >= CFG.maxRadius) return null;
 
+      // decide the fork BEFORE building the continuation: an over-budget chain
+      // may only continue if it ramifies at the same time (no bare whips)
+      const p = CFG.branchProb + Math.min(0.4, s.budBoost * 0.15);
+      const willBranch = tipsNow < this.capTips() && s.order < CFG.maxOrder &&
+        this.segs.size + 1 < this.capSegs() && this.rng.next() < p;
+      if (s.runLen + s.len > CFG.maxRunLen && !willBranch) return null;
+
       const high = s.end[1] > CFG.maxHeight * 0.82;
       const upBias = high ? -0.05 : Math.max(0.02, 0.15 - s.order * 0.03);
       let out = [s.end[0], 0, s.end[2]];
@@ -220,8 +232,7 @@
       cont.tipAge = s.tipAge * 0.35;
 
       let branched = false;
-      const p = CFG.branchProb + Math.min(0.4, s.budBoost * 0.15);
-      if (tipsNow < this.capTips() && s.order < CFG.maxOrder && this.segs.size < this.capSegs() && this.rng.next() < p) {
+      if (willBranch) {
         let perp = V.cross(s.dir, [this.rng.next() - 0.5, this.rng.next() - 0.5, this.rng.next() - 0.5]);
         if (V.len(perp) < 1e-4) perp = V.cross(s.dir, [1, 0, 0]);
         if (V.len(perp) < 1e-4) perp = [0, 0, 1];
@@ -276,7 +287,7 @@
         id: d.id, pid: d.pid, dir: V.norm(d.dir), len: d.len, maxLen: d.maxLen,
         order: d.order, wired: !!d.wired, wireAge: d.wireAge || 0, cut: !!d.cut,
         tipAge: d.tipAge || 0, budBoost: d.budBoost || 0,
-        children: [], start: [0, 0, 0], end: [0, 0, 0], thick: 1, tipCount: 1,
+        children: [], start: [0, 0, 0], end: [0, 0, 0], thick: 1, tipCount: 1, runLen: 0,
       };
     }
 

@@ -44,6 +44,12 @@ ok(st.height > 18, 'tree gained height');
 ok(st.width >= 14 && st.width <= 2 * (B.TreeCFG.maxRadius + 8), `canopy spread ${st.width.toFixed(1)} fits the viewport`);
 ok(st.width / st.height > 0.4 && st.width / st.height < 2.2, 'silhouette ratio sane');
 ok(st.blossoms >= 4, `${st.blossoms} blossoms after 90 days`);
+function maxChainRun(tree) {
+  let m = 0;
+  for (const s of tree.segs.values()) m = Math.max(m, (s.runLen || 0) + s.len);
+  return m;
+}
+ok(maxChainRun(t) <= B.TreeCFG.maxRunLen + 8, `no whips: longest chain run ${maxChainRun(t).toFixed(1)}`);
 for (const s of t.segs.values()) ok2NoNaN(s);
 console.log('  ✓ no NaN across', t.segs.size, 'segments');
 passed++;
@@ -155,6 +161,7 @@ ok(f9.stats().segments <= B.TreeCFG.maxSegments + 9 * 3 * 6, '+9y respects boost
 ok(f9.stats().width <= 2 * (B.TreeCFG.maxRadius + 10), '+9y still fits the viewport');
 const f9vox = B.Voxels.buildTree(f9).voxels.length;
 ok(f9vox < 40960, `+9y voxels fit capacity (${f9vox}, grown in ${ms9}ms)`);
+ok(maxChainRun(f9) <= B.TreeCFG.maxRunLen + 8, `+9y has no whips (longest chain ${maxChainRun(f9).toFixed(1)})`);
 ok(ms9 < 3000, `+9y preview computes fast enough (${ms9}ms)`);
 const maxThick9 = Math.max(...[...f9.segs.values()].map(s => s.thick));
 const maxThick2 = Math.max(...[...f2.segs.values()].map(s => s.thick));
