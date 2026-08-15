@@ -65,6 +65,7 @@
   let mode = 'view';
   let previewTree = null, previewYears = 0, futureBarOpen = false;
   const previewCache = new Map();
+  let lampOverride = null, lampOn = false;   // null = automatic (on at night)
   let gp = 0, burnUntil = 0, soggy = 0;
   let decals = [], decalsDirty = true;
   let lastEnv = null, statsCache = null;
@@ -74,6 +75,7 @@
 
   // ---------- Three.js scene
   let scene, camera, renderer, rotGroup, potMesh, treeMesh, decalMesh, starPts, starMat;
+  let beamA, beamB, poolMesh, bulbMat, lampHitbox;
   let m4, q4, v3, sc3, col;
   const treeSegByInst = [], treeKindByInst = [];
   let potVox = null, canopy = null;
@@ -133,6 +135,48 @@
     starMat = new THREE.PointsMaterial({ color: 0x9fb0d0, size: 2, sizeAttenuation: false, transparent: true, opacity: 0 });
     starPts = new THREE.Points(sg, starMat);
     scene.add(starPts);
+
+    // display spotlight: hanging lamp + warm light cone (world-fixed — doesn't spin with the pot)
+    const LAMP = new THREE.Vector3(14, 66, 8);
+    const lampGroup = new THREE.Group();
+    const metal = new THREE.MeshBasicMaterial({ color: 0x232c3a });
+    const cord = new THREE.Mesh(new THREE.BoxGeometry(0.7, 12, 0.7), metal);
+    cord.position.set(LAMP.x, LAMP.y + 7.4, LAMP.z);
+    const shade = new THREE.Mesh(new THREE.ConeGeometry(3.4, 3.6, 4), metal);
+    shade.position.set(LAMP.x, LAMP.y + 2.3, LAMP.z);
+    bulbMat = new THREE.MeshBasicMaterial({ color: 0xffe2a1 });
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.8, 1.8), bulbMat);
+    bulb.position.copy(LAMP);
+    lampGroup.add(cord, shade, bulb);
+
+    const beamTo = new THREE.Vector3(0, 8, 0);
+    const beamAxis = beamTo.clone().sub(LAMP);
+    const mkBeam = (r, op) => {
+      const m = new THREE.Mesh(
+        new THREE.ConeGeometry(r, beamAxis.length(), 20, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xffe3ae, transparent: true, opacity: op,
+          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+        })
+      );
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), beamAxis.clone().normalize().negate());
+      m.position.copy(LAMP).addScaledVector(beamAxis, 0.5);
+      return m;
+    };
+    beamA = mkBeam(24, 0.07);
+    beamB = mkBeam(13, 0.09);
+    poolMesh = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffe3ae, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    poolMesh.rotation.x = -Math.PI / 2;
+    poolMesh.scale.set(30, 21, 1);
+    poolMesh.position.y = 0.02;
+    lampGroup.add(beamA, beamB, poolMesh);
+    lampHitbox = new THREE.Mesh(new THREE.BoxGeometry(9, 10, 9), new THREE.MeshBasicMaterial({ visible: false }));
+    lampHitbox.position.set(LAMP.x, LAMP.y + 1.5, LAMP.z);
+    lampGroup.add(lampHitbox);
+    scene.add(lampGroup);
 
     potVox = B.Voxels.buildPot();
   }
@@ -249,8 +293,12 @@
       const nx = (bx + ox / BUF) * 2 - 1;
       const ny = -((by + oy / BUF) * 2 - 1);
       ray.setFromCamera({ x: nx, y: ny }, camera);
-      const hits = ray.intersectObjects([treeMesh, potMesh]);
+      const hits = ray.intersectObjects([treeMesh, potMesh, lampHitbox]);
       for (const h of hits) {
+        if (h.object === lampHitbox) {
+          if (opts.treeOnly) continue;
+          return { target: 'lamp' };
+        }
         if (h.instanceId === undefined) continue;
         if (h.object === potMesh) {
           if (opts.treeOnly) continue;
@@ -326,6 +374,7 @@
       // the scene is the interface: pot = rotate handle, pebbles = feed,
       // blossoms = mist, open air (outside the branches / above) = water
       const s = pickScene(e.clientX, e.clientY);
+      if (s && s.target === 'lamp') { toggleLamp(); return; }
       if (s && (s.target === 'pot' || s.target === 'pebble')) {
         drag = { type: 'rotate', lastX: e.clientX, lastY: e.clientY, moved: 0, tap: s.target };
       } else if (mode === 'view') {
@@ -452,6 +501,27 @@
 
     window.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
     window.addEventListener('pagehide', save);
+  }
+
+  // ---------- display spotlight (auto at night; click the lamp to override)
+  function toggleLamp() {
+    lampOverride = !lampOn;
+    toast(lampOverride ? '💡 spotlight on' : '🌙 spotlight off');
+    save();
+  }
+
+  let cLampT;
+  function lampFrame() {
+    const night = lastEnv ? lastEnv.night : false;
+    lampOn = lampOverride === null ? night : lampOverride;
+    beamA.visible = beamB.visible = poolMesh.visible = lampOn;
+    bulbMat.color.setHex(lampOn ? 0xffe2a1 : 0x4a4f5c);
+    if (!cLampT) cLampT = new THREE.Color();
+    // material.color multiplies the baked instance colors — this is the "lighting"
+    cLampT.setHex(!night ? 0xffffff : lampOn ? 0xfff3e2 : 0x76809c);
+    treeMesh.material.color.lerp(cLampT, 0.06);
+    potMesh.material.color.copy(treeMesh.material.color);
+    decalMesh.material.color.copy(treeMesh.material.color);
   }
 
   // ---------- branch context menu (tap a branch → ✂️/➰ right there)
@@ -678,7 +748,7 @@
     store.set(KEY, JSON.stringify({
       v: 1, ts: Date.now(),
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
-      pan: Math.round(panY * 100) / 100,
+      pan: Math.round(panY * 100) / 100, lamp: lampOverride,
       gp, burnUntil, soggy,
       decals: decals.slice(-48),
       wx: B.Weather.serialize(),
@@ -767,6 +837,13 @@
     if (env && env.snowing && fxRng.next() < 0.5) {
       addPart({ kind: 'snow', x: fxRng.next() * BUF, y: -3, vx: 0, vy: 14 + fxRng.next() * 8, ttl: 14, t: 0, c: '#ffffff', w: 2, h: 2, drift: fxRng.next() * 6.3 });
     }
+    if (lampOn && canopy && fxRng.next() < 0.05) {   // dust motes drifting in the beam
+      const c = canopyScreen();
+      addPart({
+        kind: 'spark', x: c.x + (fxRng.next() - 0.5) * c.w * 0.8, y: c.y - c.h / 2 - fxRng.next() * 26,
+        vx: (fxRng.next() - 0.5) * 3, vy: 2 + fxRng.next() * 3, ttl: 2.2, t: 0, c: '#ffe9c0', w: 1, h: 1,
+      });
+    }
     if (env && res.health > 60 && canopy && fxRng.next() < 0.006 + env.wind * 0.0006) {
       const c = canopyScreen();
       addPart({
@@ -852,6 +929,7 @@
     if (night !== nightClass) {
       nightClass = night;
       document.body.classList.toggle('night', night);
+      lampOverride = null;               // day/night flip: the lamp goes back to automatic
     }
   }
 
@@ -1051,6 +1129,7 @@
     syncPot();
     syncDecals();
     skyFrame(tms);
+    lampFrame();
     renderer.render(scene, camera);
     fxFrame(dt, tms);
   }
@@ -1073,6 +1152,7 @@
       gp = data.gp || 0;
       burnUntil = data.burnUntil || 0;
       soggy = data.soggy || 0;
+      lampOverride = data.lamp === true || data.lamp === false ? data.lamp : null;
       decals = Array.isArray(data.decals) ? data.decals : [];
       B.Weather.hydrate(data.wx);
     }
@@ -1097,6 +1177,13 @@
       project: projectTreePt,
       pick: pickAt,
       sceneAt: (x, y) => pickScene(x, y),
+      get lamp() { return { on: lampOn, override: lampOverride }; },
+      lampScreen: () => {
+        scene.updateMatrixWorld();
+        v3.copy(lampHitbox.position).project(camera);
+        return { x: (v3.x * 0.5 + 0.5) * BUF, y: (-v3.y * 0.5 + 0.5) * BUF };
+      },
+      toggleLamp,
     };
     const hashFF = /ff=(\d+)/.exec(location.hash);   // #ff=N — dev: fast-forward N hours
     if (hashFF) simulate(parseInt(hashFF[1], 10) * 3600, { offline: false, fx: false });

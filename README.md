@@ -25,6 +25,7 @@ npx serve .        # or: python3 -m http.server
 | **scroll / pinch / + −** | zoom in and out (buttons on the canvas, or the `+`/`-` keys) |
 | **drag ↕ / ↑ ↓ keys** | when zoomed in, move the view up and down; zooming out re-centers |
 | 🔮 **FUTURE** | preview your bonsai after **2–9 years** of good care — a deterministic vision grown from your exact tree (older visions: denser canopy, stockier trunk); nothing changes until you return to NOW |
+| 💡 **SPOTLIGHT** | a display lamp lights the tree at night (auto); click the lamp to toggle |
 | 💧 **WATER** | soil moisture — drains faster on hot, dry days (shortcut: **tap the open air** above/beside the tree) |
 | 🌫 **MIST** | leaf humidity — nice-to-have, the tree loves it (shortcut: **tap the blossoms**) |
 | 🧪 **FEED** | fertilizer speeds growth; overfeeding burns the roots (shortcut: **tap the pebbles**) |
