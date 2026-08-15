@@ -361,6 +361,25 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.keyboard.press('Escape');   // leave wire mode so canvas drags rotate/pan
   await sleep(120);
 
+  // --- right-click cancels any tool / menu
+  await page.click('#btn-wire');
+  await sleep(150);
+  await page.mouse.click(rect.left + rect.w / 2, rect.top + 20, { button: 'right' });
+  await sleep(150);
+  const rcMode = await page.evaluate(() => __bonsai.mode);
+  check(rcMode === 'view', 'right-click exits the wire tool');
+  const bt3 = await findBranchTap();
+  if (bt3) {
+    await page.mouse.click(bt3.x, bt3.y);
+    await sleep(250);
+    const openedRc = !(await menuHidden());
+    await page.mouse.click(bt3.x, bt3.y, { button: 'right' });
+    await sleep(150);
+    check(openedRc && (await menuHidden()), 'right-click closes the branch menu');
+  } else {
+    check(true, 'no branch for right-click menu test — skipped');
+  }
+
   // --- FEED / MIST buttons
   const meters0 = await page.evaluate(() => ({ food: __bonsai.res.food, mist: __bonsai.res.mist }));
   await page.click('#btn-feed');

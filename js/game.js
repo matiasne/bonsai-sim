@@ -426,6 +426,15 @@
     }, { passive: false });
 
     view.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button === 2) {
+        // right-click: cancel whatever is in progress and put the tools away
+        const hadTool = drag !== null || branchMenuSeg !== null || mode !== 'view';
+        drag = null;
+        closeBranchMenu();
+        if (mode !== 'view') setMode('view');
+        else if (!hadTool && futureBarOpen) toggleFuture();
+        return;
+      }
       if (e.button !== 0 && e.pointerType === 'mouse') return;
       lastInteract = performance.now();
       view.setPointerCapture(e.pointerId);
