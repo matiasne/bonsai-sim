@@ -251,6 +251,41 @@
     return s + '}';
   }
 
+  // ---------- DNA codes: base64url(deflate(canonical JSON)), shareable in a URL
+  // Leading flag char picks the codec: '1' deflate-raw, '0' plain (fallback for
+  // engines without CompressionStream). Works in browsers and Node ≥18.
+  const b64u = {
+    enc(bytes) {
+      let s = '';
+      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    },
+    dec(str) {
+      const s = atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+      const out = new Uint8Array(s.length);
+      for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+      return out;
+    },
+  };
+  async function pipeBytes(bytes, stream) {
+    const piped = new Blob([bytes]).stream().pipeThrough(stream);
+    return new Uint8Array(await new Response(piped).arrayBuffer());
+  }
+  async function dnaEncode(env) {
+    const json = new TextEncoder().encode(canonical(env));
+    if (typeof CompressionStream === 'function') {
+      return '1' + b64u.enc(await pipeBytes(json, new CompressionStream('deflate-raw')));
+    }
+    return '0' + b64u.enc(json);
+  }
+  async function dnaDecode(code) {
+    const bytes = b64u.dec(code.slice(1));
+    const json = code[0] === '1'
+      ? await pipeBytes(bytes, new DecompressionStream('deflate-raw'))
+      : bytes;
+    return JSON.parse(new TextDecoder().decode(json));
+  }
+
   // Advance whole quanta (sub-quantum remainders are the caller's to keep).
   // Aggregated fx events are capped — replays cross years and only the UI cares.
   function advance(state, seconds, off) {
@@ -270,6 +305,7 @@
     STEP_S, STEP_H, DEATH_H, OFFLINE_CAP_S, PACE, SEASON_GROWTH, WIRE_RATE,
     seasonInfo, newState, healthTarget, step, advance,
     applyAction, quantBend, decodeBend, loadSnap, replay, canonical,
+    dnaEncode, dnaDecode,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = B;

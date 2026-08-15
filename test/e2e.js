@@ -804,6 +804,47 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(reload2.segs === postReload.segs && reload2.water === postReload.water,
     `replaying the log twice is idempotent (${reload2.segs} segs, water ${reload2.water})`);
 
+  // --- DNA share link: a second page replays the exact tree, read-only
+  const dnaCode = await page.evaluate(() => __bonsai.dnaCode());
+  const dnaLive = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, stored: localStorage.getItem('pixel-bonsai-v1') }));
+  check(typeof dnaCode === 'string' && /^[01][A-Za-z0-9_-]+$/.test(dnaCode), `DNA code minted (${dnaCode.length} chars, URL-safe)`);
+  const vp = await browser.newPage();
+  await vp.setViewport({ width: 720, height: 980 });
+  await vp.goto(URL + '#dna=' + dnaCode, { waitUntil: 'load' });
+  await vp.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+  await sleep(600);
+  const viewer = await vp.evaluate(() => ({
+    viewer: __bonsai.viewer,
+    segs: __bonsai.tree.segs.size,
+    water: Math.round(__bonsai.res.water),
+    actionsHidden: getComputedStyle(document.querySelector('#actions')).display === 'none',
+    status: document.querySelector('#status-line').textContent,
+  }));
+  check(viewer.viewer === true && viewer.actionsHidden, 'DNA link opens the read-only viewer (care UI hidden)');
+  check(viewer.segs === dnaLive.segs, `viewer replayed the exact tree (${viewer.segs} segs)`);
+  check(/🧬/.test(viewer.status), 'viewer banner explains the read-only view');
+  const airTap = await vp.evaluate(() => {
+    const r = document.querySelector('#view').getBoundingClientRect();
+    for (let dx = 10; dx < r.width - 10; dx += 12) {
+      const x = r.left + dx, y = r.top + 14;
+      if (!__bonsai.sceneAt(x, y)) return { x, y };
+    }
+    return null;
+  });
+  if (airTap) {
+    await vp.mouse.click(airTap.x, airTap.y);
+    await sleep(250);
+    const afterTap = await vp.evaluate(() => ({ water: Math.round(__bonsai.res.water), stored: localStorage.getItem('pixel-bonsai-v1') }));
+    check(afterTap.water === viewer.water, 'water tap is refused in the viewer');
+    // the owner page keeps autosaving (ts changes) — the envelope must not
+    const dnaOf = (s) => { try { return JSON.stringify(JSON.parse(s).dna); } catch (e) { return null; } };
+    check(dnaOf(afterTap.stored) === dnaOf(dnaLive.stored), "the viewer never touched the owner's envelope");
+  } else {
+    check(true, 'no open air found for the viewer tap — skipped');
+    check(true, 'viewer save check skipped with it');
+  }
+  await vp.close();
+
   // --- wallpaper mode: fullscreen widescreen scene, UI hidden, cut & wire usable
   const wp0 = await browser.newPage();
   await wp0.setViewport({ width: 1600, height: 900 });

@@ -391,4 +391,23 @@ console.log('event log + replay (the envelope IS the tree)');
   ok(m2.simT === 86400 && m2.tree.ageHours > legacyTree.ageHours, 'the migrated tree kept growing');
 }
 
-console.log(`\nPASS — ${passed} checks. Tree: ${t.segs.size} segs, height ${t.stats().height.toFixed(1)}, ${t.stats().blossoms} blossoms, ${built.voxels.length} voxels.`);
+(async () => {
+  console.log('DNA codes (URL-safe, byte-stable, replayable)');
+  const env = {
+    v: 2, seed: 31337, g: G0, s: 0, t: 6 * 86400,
+    e: [['W', 43200], ['F', 43200], ['O', 86400, 86400], ['W', 3 * 86400], ['L', 4 * 86400, 3600]],
+  };
+  const code = await SIM.dnaEncode(env);
+  ok(/^[01][A-Za-z0-9_-]+$/.test(code), `DNA code is URL-safe (${code.length} chars)`);
+  const back = await SIM.dnaDecode(code);
+  ok(SIM.canonical(back) === SIM.canonical(env), 'encode → decode round-trips canonically');
+  ok(simSnap(SIM.replay(back)) === simSnap(SIM.replay(env)), 'decoded DNA replays identically');
+  ok(await SIM.dnaEncode(back) === code, 'the code itself is byte-stable through a round-trip');
+  const plain = '0' + Buffer.from(SIM.canonical(env)).toString('base64url');
+  ok(SIM.canonical(await SIM.dnaDecode(plain)) === SIM.canonical(env), 'uncompressed fallback codec decodes too');
+  if (typeof CompressionStream === 'function') {
+    ok(code[0] === '1' && code.length < SIM.canonical(env).length + 2, 'deflate codec engaged');
+  }
+
+  console.log(`\nPASS — ${passed} checks. Tree: ${t.segs.size} segs, height ${t.stats().height.toFixed(1)}, ${t.stats().blossoms} blossoms, ${built.voxels.length} voxels.`);
+})().catch((e) => { console.error('FAIL —', e); process.exit(1); });

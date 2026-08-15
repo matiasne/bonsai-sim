@@ -395,3 +395,13 @@ html.wallpaper #canvas-stack {
   border: none;
   box-shadow: none;
 }
+
+/* ---------- DNA viewer mode: someone else's bonsai, read-only ---------- */
+body.viewer #actions,
+body.viewer #panel .stat,
+body.viewer #chip-weather,
+body.viewer #future-bar,
+body.viewer #branch-menu,
+body.viewer footer { display: none !important; }
+body.viewer #status-line { color: var(--ink-soft); }
+body.viewer #tree-facts { margin-top: 0; }

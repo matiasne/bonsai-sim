@@ -8,6 +8,8 @@
 
   // ---------- constants
   const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
+  const DNA_HASH = /[#&]dna=([^&\s]+)/.exec(location.hash);
+  const VIEWER = !!DNA_HASH;   // #dna=… — read-only view of a shared bonsai
   let BUFH = 176;                   // backbuffer height (pixel density × 176; CSS upscales)
   let BUFW = 176;                   // width follows the screen in wallpaper mode
   let aspect = 1;
@@ -556,7 +558,7 @@
           // pour from above — unless this tap was just dismissing an open menu
           if (!menuWasOpen) drag = { type: 'maybeTap', action: 'water', start };
         }
-        else if (s && s.target === 'wire' && !previewTree) {
+        else if (s && s.target === 'wire' && !previewTree && !VIEWER) {
           // grab a placed wire: bend its branch right away (tap still opens the menu)
           drag = beginBend(s.segId, e, true);
         } else if (s && s.target === 'wood' && !previewTree) {
@@ -756,6 +758,7 @@
   }
 
   function doWire(segId) {
+    if (guardViewer()) return false;
     const ev = ['w', S.simT, segId];
     if (!SIM.applyAction(S, ev).ok) return false;
     appendEvent(ev);
@@ -792,6 +795,7 @@
   // stabilize (1–3 months by thickness), it springs back toward its pre-wiring
   // direction — proportionally to how unset it still is (canonical, instant).
   function doUnwire(id) {
+    if (guardViewer()) return;
     const ev = ['u', S.simT, id];
     const out = SIM.applyAction(S, ev);
     if (!out.ok) return;
@@ -843,7 +847,7 @@
 
   function openBranchMenu(segId, clientX, clientY, kind) {
     const seg = tree.segs.get(segId);
-    if (!seg || previewTree) return;
+    if (!seg || previewTree || VIEWER) return;
     if (guardDead()) return;
     clearTimeout(branchMenuTimer);
     branchMenuTimer = null;
@@ -883,7 +887,7 @@
 
   // ---------- care actions
   function doCut(segId) {
-    if (guardPreview() || guardDead()) return;
+    if (guardViewer() || guardPreview() || guardDead()) return;
     const ev = ['C', S.simT, segId];
     const r = SIM.applyAction(S, ev);
     if (!r.ok) {
@@ -955,12 +959,19 @@
 
   function guardDead() {
     if (!res.dead) return false;
+    if (VIEWER) return true;
     toast('🪦 the tree has passed away — plant a new one?', { ms: 9000, action: { label: '🌱 NEW TREE', fn: freshTree } });
     return true;
   }
 
+  function guardViewer() {
+    if (!VIEWER) return false;
+    toast('🧬 a shared bonsai — look, but do not touch');
+    return true;
+  }
+
   function doWater() {
-    if (guardPreview() || guardDead()) return;
+    if (guardViewer() || guardPreview() || guardDead()) return;
     const ev = ['W', S.simT];
     const out = SIM.applyAction(S, ev);
     if (!out.ok) return;
@@ -971,7 +982,7 @@
   }
 
   function doMist(quiet) {
-    if (guardPreview() || guardDead()) return;
+    if (guardViewer() || guardPreview() || guardDead()) return;
     const ev = ['M', S.simT];
     if (!SIM.applyAction(S, ev).ok) return;
     appendEvent(ev);
@@ -980,7 +991,7 @@
   }
 
   function doFeed() {
-    if (guardPreview() || guardDead()) return;
+    if (guardViewer() || guardPreview() || guardDead()) return;
     const ev = ['F', S.simT];
     const out = SIM.applyAction(S, ev);
     if (!out.ok) return;
@@ -999,7 +1010,7 @@
   // Pinch a blossom pad: it regrows finer, ramifies denser, and the opened
   // crown catches more light (a temporary growth boost). Costs a little vigor.
   function doTrim(segId) {
-    if (guardPreview() || guardDead()) return;
+    if (guardViewer() || guardPreview() || guardDead()) return;
     const ev = ['P', S.simT, segId];
     const r = SIM.applyAction(S, ev);
     if (!r.ok) {
@@ -1021,6 +1032,7 @@
   }
 
   function setMode(m) {
+    if (VIEWER && m !== 'view') { guardViewer(); return; }
     if (previewTree && m !== 'view') { guardPreview(); return; }
     if (res.dead && m !== 'view') { guardDead(); return; }
     mode = (mode === m) ? 'view' : m;
@@ -1034,7 +1046,7 @@
   }
 
   function doTimeLapse() {
-    if (guardPreview()) return;
+    if (guardViewer() || guardPreview()) return;
     appendEvent(['L', S.simT, 3600]);
     renderStepFx(SIM.advance(S, 3600, false), true);
     toast('⏩ one hour passes…');
@@ -1043,6 +1055,7 @@
   }
 
   function freshTree() {
+    if (guardViewer()) return;
     if (futureBarOpen) toggleFuture();
     previewCache.clear();
     drawSandBase();
@@ -1138,6 +1151,7 @@
   // v2: the envelope (seed + action log) IS the tree — no geometry is stored.
   // Everything else here is cosmetic or non-canonical local scheduling state.
   function save() {
+    if (VIEWER) return;   // a shared bonsai never touches this browser's save
     lastSaveAt = Date.now();
     dna.t = S.simT;
     store.set(KEY, JSON.stringify({
@@ -1486,6 +1500,17 @@
       toast(ok ? '📍 location set!' : '📍 no luck — try searching your city instead');
       if (ok) { updateChips(); save(); }
     };
+    $('#btn-dna').onclick = async () => {
+      dna.t = S.simT;
+      try {
+        const code = await SIM.dnaEncode(dna);
+        const url = location.href.split('#')[0] + '#dna=' + code;
+        await navigator.clipboard.writeText(url);
+        toast('🧬 DNA link copied — it opens a read-only view of this exact tree');
+      } catch (e) {
+        toast('🧬 could not copy the link (' + (e && e.message || e) + ')');
+      }
+    };
     let resetArmed = 0;
     $('#btn-reset').onclick = (e) => {
       if (Date.now() - resetArmed < 3000) {
@@ -1568,7 +1593,8 @@
 
   function updateStatus() {
     let txt;
-    if (previewTree) txt = `🔮 your bonsai after ${previewYears} years of loving care — press NOW to return`;
+    if (VIEWER) txt = '🧬 viewing a shared bonsai — read-only · drag the pot to rotate';
+    else if (previewTree) txt = `🔮 your bonsai after ${previewYears} years of loving care — press NOW to return`;
     else if (mode === 'prune') txt = '✂️ click a branch or blossom to cut — esc to exit';
     else if (mode === 'trim') txt = '🍃 click a blossom pad to pinch it — esc to exit';
     else if (mode === 'wire') txt = '➰ click a branch, drag to bend · dbl-click unwires · esc exits';
@@ -1646,11 +1672,82 @@
     fxFrame(dt, tms);
   }
 
+  // ---------- dev/test hooks
+  function exposeDev() {
+    window.__bonsai = {
+      get tree() { return tree; },
+      get res() { return res; },
+      get sim() { return S; },
+      get viewer() { return VIEWER; },
+      dna: () => { dna.t = S.simT; return JSON.parse(SIM.canonical(dna)); },
+      dnaCode: () => { dna.t = S.simT; return SIM.dnaEncode(dna); },
+      simulate: (seconds, opts) => {   // dev/test time injection — logged so replay stays truthful
+        if (VIEWER) return;
+        const off = !!(opts && opts.offline);
+        const quanta = Math.ceil(seconds / SIM.STEP_S) * SIM.STEP_S;
+        appendEvent([off ? 'O' : 'L', S.simT, quanta]);
+        renderStepFx(SIM.advance(S, quanta, off), false);
+        statsCache = tree.stats();
+        updateAll();
+      },
+      setPreview, toggleFuture, applyZoom,
+      get env() { return lastEnv; },
+      get mode() { return mode; },
+      get zoom() { return zoom; },
+      get pix() { return { idx: resIdx, bufW: BUFW, bufH: BUFH }; },
+      get foliage() { return lastTier; },
+      get dying() { return S.dyingH; },
+      get panY() { return panY; },
+      get theta() { return theta; },
+      get preview() { return previewTree ? previewYears : 0; },
+      projectLocal: (x, y, z) => projectLocalPt(x, y, z),
+      previewStats: () => previewTree && previewTree.stats(),
+      weather: B.Weather,
+      project: projectTreePt,
+      pick: pickAt,
+      sceneAt: (x, y) => pickScene(x, y),
+      sandSum: () => {
+        const d = sandCtx.getImageData(0, 0, SAND_TEX, SAND_TEX).data;
+        let s = 0;
+        for (let i = 0; i < d.length; i += 97) s = (s + d[i]) % 1e9;
+        return s;
+      },
+    };
+  }
+
+  // ---------- read-only DNA viewer (#dna=…): replay someone else's envelope,
+  // render it, touch nothing — no sim tick, no save, no weather fetches.
+  async function bootViewer(code) {
+    let env = null;
+    try { env = await SIM.dnaDecode(code); } catch (e) { env = null; }
+    if (!env || env.v !== 2 || typeof env.g !== 'number') {
+      return fatal('🧬 this DNA link is damaged or from a newer version — ask for a fresh one.');
+    }
+    dna = env;
+    S = SIM.replay(dna);
+    tree = S.tree; res = S.res;
+    statsCache = tree.stats();
+    try { setupScene(); } catch (e) {
+      return fatal('😢 WebGL is unavailable in this browser, and the bonsai needs it. (' + e.message + ')');
+    }
+    document.body.classList.add('viewer');
+    exposeDev();
+    buildUI();
+    bindInput();
+    applyZoom(1);
+    applyPan(0);
+    applyRes(2);
+    lastEnv = B.Weather.env(new Date());
+    updateAll();
+    requestAnimationFrame(frame);
+  }
+
   // ---------- boot
   function boot() {
     if (typeof THREE === 'undefined') {
       return fatal('🌸 Pixel Bonsai needs internet the first time it loads (the 3D library comes from a CDN). Reconnect and refresh.');
     }
+    if (VIEWER) { bootViewer(DNA_HASH[1]); return; }
     let data = null;
     try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { data = null; }
     if (data && data.v === 1) data.dna = migrateV1(data);
@@ -1701,41 +1798,7 @@
     savedPix = data && typeof data.pix2 === 'number' ? data.pix2 : 2;
     applyRes(WALLPAPER ? 2 : savedPix);   // the wallpaper always renders fine — there's no ▦ button to fix a coarse save
 
-    window.__bonsai = {
-      get tree() { return tree; },
-      get res() { return res; },
-      get sim() { return S; },
-      simulate: (seconds, opts) => {   // dev/test time injection — logged so replay stays truthful
-        const off = !!(opts && opts.offline);
-        const quanta = Math.ceil(seconds / SIM.STEP_S) * SIM.STEP_S;
-        appendEvent([off ? 'O' : 'L', S.simT, quanta]);
-        renderStepFx(SIM.advance(S, quanta, off), false);
-        statsCache = tree.stats();
-        updateAll();
-      },
-      setPreview, toggleFuture, applyZoom,
-      get env() { return lastEnv; },
-      get mode() { return mode; },
-      get zoom() { return zoom; },
-      get pix() { return { idx: resIdx, bufW: BUFW, bufH: BUFH }; },
-      get foliage() { return lastTier; },
-      get dying() { return S.dyingH; },
-      get panY() { return panY; },
-      get theta() { return theta; },
-      get preview() { return previewTree ? previewYears : 0; },
-      projectLocal: (x, y, z) => projectLocalPt(x, y, z),
-      previewStats: () => previewTree && previewTree.stats(),
-      weather: B.Weather,
-      project: projectTreePt,
-      pick: pickAt,
-      sceneAt: (x, y) => pickScene(x, y),
-      sandSum: () => {
-        const d = sandCtx.getImageData(0, 0, SAND_TEX, SAND_TEX).data;
-        let s = 0;
-        for (let i = 0; i < d.length; i += 97) s = (s + d[i]) % 1e9;
-        return s;
-      },
-    };
+    exposeDev();
     const hashFF = /ff=(\d+)/.exec(location.hash);   // #ff=N — dev: fast-forward N hours
     if (hashFF) {
       const secs = parseInt(hashFF[1], 10) * 3600;
