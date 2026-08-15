@@ -137,6 +137,27 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const rAfter = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), blossomNow.id);
       check(rAfter < padMenu.r, `TRIM button pinched the pad (r ${padMenu.r.toFixed(1)} → ${rAfter.toFixed(1)})`);
     }
+    // the offer must appear even on a weak tree — the click explains instead
+    await page.evaluate(() => { __bonsai.res.health = 32; });
+    await sleep(400);
+    const weakTap = await findBlossom();
+    if (weakTap) {
+      await page.mouse.click(weakTap.x, weakTap.y);
+      await sleep(300);
+      const weakMenu = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+      check(weakMenu, 'the TRIM offer appears even on a weak tree');
+      if (weakMenu) {
+        const rW = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), weakTap.id);
+        await page.evaluate(() => document.querySelector('#bm-trim').click());
+        await sleep(250);
+        const rW2 = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), weakTap.id);
+        check(Math.abs(rW2 - rW) < 0.01, 'a weak tree politely refuses the pinch');
+      }
+    } else {
+      check(true, 'no pad for the weak-tree check — skipped');
+    }
+    await page.evaluate(() => { __bonsai.res.health = 80; });
+    await sleep(300);
     let openNow = false;
     for (let att = 0; att < 2 && !openNow; att++) {   // taps can miss on canopy drift
       const blossom2 = await findBlossom();

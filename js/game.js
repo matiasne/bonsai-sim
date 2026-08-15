@@ -623,8 +623,9 @@
           doMist();
           const id = drag.segId;
           const seg = id !== undefined ? tree.segs.get(id) : null;
+          // always OFFER the pinch — doTrim explains if the tree/pad can't take it
           if (seg && !seg.children.length && !seg.cut &&
-              tree.leafRadius(seg) >= 2 && res.health >= 40 && !previewTree) {
+              tree.leafRadius(seg) >= 1.6 && !previewTree) {
             openBranchMenu(id, e.clientX, e.clientY, 'pad');
           }
         }
