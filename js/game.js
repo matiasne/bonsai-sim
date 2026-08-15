@@ -102,7 +102,8 @@
 
   // ---------- state
   let S = null;       // deterministic sim state (B.Sim): tree, res, gp, burnH, soggy, trimBoost, dyingH, simT
-  let tree = null;    // alias of S.tree — rebound on boot/freshTree
+  let dna = null;     // the envelope {v:2, seed, g, s, t, e, snap?} — S is always replay(dna) + live steps
+  let tree = null;    // alias of S.tree — rebound on boot/freshTree/log rewind
   let res = null;     // alias of S.res
   let pendingSec = 0; // wall-clock time not yet folded into the sim (sub-quantum remainder)
   let theta = -0.55, thetaVel = 0;
@@ -111,7 +112,6 @@
   let previewTree = null, previewYears = 0, futureBarOpen = false;
   const previewCache = new Map();
   let decals = [], decalsDirty = true;
-  let springs = [];   // branches easing back after an early unwire
   let lastEnv = null, statsCache = null;
   let lastTick = Date.now(), lastSaveAt = Date.now();
   let drag = null, lastInteract = 0;
@@ -531,14 +531,11 @@
         const hit = pickAt(e.clientX, e.clientY);
         if (hit) {
           const seg = tree.segs.get(hit.segId);
-          if (seg && !seg.wired) {
-            if (tree.wire(hit.segId, true) !== null) {
-              cancelSpring(hit.segId);
-              const mo = Math.max(1, Math.round(tree.wireSetHours(seg) / 720));
-              toast(`➰ wire on — drag to bend · needs ~${mo} month${mo > 1 ? 's' : ''} to set`);
-            }
+          if (seg && !seg.wired && doWire(hit.segId)) {
+            const mo = Math.max(1, Math.round(tree.wireSetHours(seg) / 720));
+            toast(`➰ wire on — drag to bend · needs ~${mo} month${mo > 1 ? 's' : ''} to set`);
           }
-          drag = { type: 'bend', segId: hit.segId, lastX: e.clientX, lastY: e.clientY, moved: 0 };
+          drag = beginBend(hit.segId, e);
           return;
         }
       }
@@ -561,7 +558,7 @@
         }
         else if (s && s.target === 'wire' && !previewTree) {
           // grab a placed wire: bend its branch right away (tap still opens the menu)
-          drag = { type: 'bend', segId: s.segId, lastX: e.clientX, lastY: e.clientY, moved: 0, fromView: true };
+          drag = beginBend(s.segId, e, true);
         } else if (s && s.target === 'wood' && !previewTree) {
           drag = { type: 'maybeBranch', segId: s.segId, start };            // tap → ✂️/➰ menu
         } else if (s && s.target === 'sand') {
@@ -658,7 +655,11 @@
           axis = bendAxisLocal();
           ang = clamp((gx * dy - gy * dx) / Math.max(400, g2), -0.12, 0.12);
         }
-        if (ang) tree.bend(drag.segId, axis, ang);
+        // micro-bends give live feedback; the drag's NET rotation is what gets
+        // logged (and snapped to) when the drag ends
+        if (ang && tree.bend(drag.segId, axis, ang)) {
+          drag.q = B.Vec.qMul(B.Vec.qFromAxisAngle(axis, ang), drag.q);
+        }
       }
     });
 
@@ -692,11 +693,12 @@
       }
       else if (drag.type === 'rotate' && (drag.moved || 0) < 6 && drag.tap === 'pebble' && mode === 'view') doFeed();
       else if (drag.type === 'bend' && drag.moved < 3) {
+        finishBend(drag, false);
         if (drag.fromView) openBranchMenu(drag.segId, e.clientX, e.clientY);   // tap on coil → menu (unwire lives there)
         else toast('➰ drag the branch to bend it');
       }
       else if (drag.type === 'bend') {
-        save();
+        finishBend(drag, true);
         if (mode === 'wire') {                 // bend finished: the tool puts itself away
           setMode('view');
           toast('➰ shaped — grab the copper coil anytime to re-bend');
@@ -736,9 +738,32 @@
     window.addEventListener('pagehide', save);
   }
 
-  // ---------- wire removal + spring-back
-  function cancelSpring(id) { springs = springs.filter(sp => sp.id !== id); }
+  // ---------- the action log
+  // Every state-changing user action goes through SIM.applyAction and, if the
+  // sim accepted it, is appended here. The envelope (seed + this log) is the
+  // bonsai — saves, undo and DNA sharing all replay it.
+  function appendEvent(ev) { dna.e.push(ev); }
 
+  // Rebuild the sim state from the envelope (after an undo edited the log).
+  function rebuildFromLog() {
+    dna.t = S.simT;
+    S = SIM.replay(dna);
+    tree = S.tree; res = S.res;
+    statsCache = tree.stats();
+    previewCache.clear();
+    treeKey = '';
+    updateAll();
+  }
+
+  function doWire(segId) {
+    const ev = ['w', S.simT, segId];
+    if (!SIM.applyAction(S, ev).ok) return false;
+    appendEvent(ev);
+    save();
+    return true;
+  }
+
+  // ---------- wire removal + spring-back
   // Removing an unset wire is a decision: warn first (the wire needs time on
   // the branch for the shape to hold), remove only on confirmation.
   function requestUnwire(id) {
@@ -764,31 +789,52 @@
   }
 
   // Unwire a branch. If the wire wasn't on long enough for the branch to
-  // stabilize (1–3 months by thickness), it slowly springs back toward its pre-wiring
-  // direction — proportionally to how unset it still is.
+  // stabilize (1–3 months by thickness), it springs back toward its pre-wiring
+  // direction — proportionally to how unset it still is (canonical, instant).
   function doUnwire(id) {
-    const seg = tree.segs.get(id);
-    if (!seg || !seg.wired) return;
-    const Vv = B.Vec;
-    const dir0 = seg.dir0 && seg.dir0.slice();
-    const setFrac = clamp(seg.wireAge / tree.wireSetHours(seg), 0, 1);
-    tree.wire(id, false);
-    let sprung = false;
-    if (dir0) {
-      const cur = seg.dir;
-      const axis = Vv.cross(cur, dir0);
-      const dot = clamp(Vv.dot(Vv.norm(cur), Vv.norm(dir0)), -1, 1);
-      const total = Math.acos(dot) * (1 - setFrac);
-      if (Vv.len(axis) > 1e-4 && total > 0.02) {
-        cancelSpring(id);
-        springs.push({ id, axis: Vv.norm(axis), remaining: total });
-        sprung = true;
-      }
-    }
-    toast(sprung
-      ? (setFrac > 0.5 ? '➰ wire off — mostly set, it springs back a little' : '➰ wire off — not set yet, the branch springs back')
+    const ev = ['u', S.simT, id];
+    const out = SIM.applyAction(S, ev);
+    if (!out.ok) return;
+    appendEvent(ev);
+    treeKey = '';
+    toast(out.sprung
+      ? (out.setFrac > 0.5 ? '➰ wire off — mostly set, it springs back a little' : '➰ wire off — not set yet, the branch springs back')
       : '➰ wire removed');
     save();
+  }
+
+  // ---------- bend drags → one logged net rotation
+  function beginBend(segId, e, fromView) {
+    const dirs = new Map();
+    const seg = tree.segs.get(segId);
+    if (seg) {
+      const walk = (s) => { dirs.set(s.id, s.dir.slice()); for (const c of s.children) walk(c); };
+      walk(seg);
+    }
+    return {
+      type: 'bend', segId, lastX: e.clientX, lastY: e.clientY, moved: 0,
+      fromView: !!fromView, q: [0, 0, 0, 1], dirs,
+    };
+  }
+
+  // End of a drag: rewind the micro-bends, then apply (and log) the single
+  // quantized net rotation — so live play lands exactly where a replay will.
+  function finishBend(drag, commit) {
+    let changed = false;
+    for (const [id, dir] of drag.dirs) {
+      const s = tree.segs.get(id);
+      if (s) { s.dir = dir; changed = true; }
+    }
+    if (changed) { tree.recompute(); tree.rev++; treeKey = ''; }
+    if (!commit) return;
+    const net = B.Vec.qToAxisAngle(drag.q);
+    if (net.ang < 1e-3) return;
+    const q = SIM.quantBend(net.axis, net.ang);
+    const ev = ['B', S.simT, drag.segId, q.ax, q.ay, q.az, q.a];
+    if (SIM.applyAction(S, ev).ok) {
+      appendEvent(ev);
+      save();
+    }
   }
 
   // ---------- branch context menu (tap a branch → ✂️/➰; tap a pad → lone 🍃)
@@ -837,16 +883,30 @@
 
   // ---------- care actions
   function doCut(segId) {
-    const r = tree.cut(segId);
+    if (guardPreview() || guardDead()) return;
+    const ev = ['C', S.simT, segId];
+    const r = SIM.applyAction(S, ev);
     if (!r.ok) {
       if (r.reason === 'trunk') toast("🚫 that's the trunk base — too thick to cut");
       else if (r.reason === 'thick') toast('🚫 too thick for scissors — prune the thinner branches');
       return;
     }
+    appendEvent(ev);
+    const evIndex = dna.e.length - 1;
     debrisFX(projectTreePt(r.at));
     toast(`✂️ snip! it will bud back denser (−${r.removed})`, {
       ms: 9000,
-      action: { label: 'UNDO', fn: () => { if (tree.restore(r.undo)) { toast('🌱 phew — branch restored'); save(); } } },
+      action: {
+        label: 'UNDO',
+        // undo = remove the cut from the log and replay — the log IS the tree
+        fn: () => {
+          if (dna.e[evIndex] !== ev) return;
+          dna.e.splice(evIndex, 1);
+          rebuildFromLog();
+          toast('🌱 phew — branch restored');
+          save();
+        },
+      },
     });
     save();
   }
@@ -901,32 +961,32 @@
 
   function doWater() {
     if (guardPreview() || guardDead()) return;
-    if (res.water > 90) {
-      S.soggy = Math.min(100, S.soggy + 25);
-      toast('🫧 soggy! the soil is already drenched…');
-    } else {
-      toast(pick(['💧 a good soak', '💧 glug glug…', '💧 the roots drink deep']));
-    }
-    res.water = clamp(res.water + 35, 0, 100);
+    const ev = ['W', S.simT];
+    const out = SIM.applyAction(S, ev);
+    if (!out.ok) return;
+    appendEvent(ev);
+    toast(out.soggy ? '🫧 soggy! the soil is already drenched…'
+      : pick(['💧 a good soak', '💧 glug glug…', '💧 the roots drink deep']));
     waterFX(); updateAll(); save();
   }
 
   function doMist(quiet) {
     if (guardPreview() || guardDead()) return;
-    res.mist = clamp(res.mist + 45, 0, 100);
+    const ev = ['M', S.simT];
+    if (!SIM.applyAction(S, ev).ok) return;
+    appendEvent(ev);
     if (!quiet) toast(pick(['🌫 psssst — the leaves glisten', '🌫 a fine morning mist', '🌫 mountain air vibes']));
     mistFX(); updateAll(); save();
   }
 
   function doFeed() {
     if (guardPreview() || guardDead()) return;
-    res.food = clamp(res.food + 45, 0, 130);
-    if (res.food > 100) {
-      S.burnH = 12;
-      toast('🔥 fertilizer burn! go easy for a while…');
-    } else {
-      toast(pick(['🧪 nom nom — growth boost!', '🧪 pellets sprinkled on the soil']));
-    }
+    const ev = ['F', S.simT];
+    const out = SIM.applyAction(S, ev);
+    if (!out.ok) return;
+    appendEvent(ev);
+    toast(out.burned ? '🔥 fertilizer burn! go easy for a while…'
+      : pick(['🧪 nom nom — growth boost!', '🧪 pellets sprinkled on the soil']));
     for (let i = 0; i < 6; i++) {
       const p = B.Voxels.pebbleSpot(() => fxRng.next());
       decals.push({ u: p.u, v: p.v, type: 'pellet', ts: Date.now() });
@@ -939,14 +999,15 @@
   // Pinch a blossom pad: it regrows finer, ramifies denser, and the opened
   // crown catches more light (a temporary growth boost). Costs a little vigor.
   function doTrim(segId) {
-    if (res.health < 40) { toast('🍃 the tree is too stressed to trim right now'); return; }
-    const r = tree.trimTip(segId);
+    if (guardPreview() || guardDead()) return;
+    const ev = ['P', S.simT, segId];
+    const r = SIM.applyAction(S, ev);
     if (!r.ok) {
-      if (r.reason === 'small') toast('🍃 that pad is already tender');
+      if (r.reason === 'stressed') toast('🍃 the tree is too stressed to trim right now');
+      else if (r.reason === 'small') toast('🍃 that pad is already tender');
       return;
     }
-    S.trimBoost = Math.min(20, S.trimBoost + 1);
-    res.health = Math.max(30, res.health - 1);
+    appendEvent(ev);
     const p = projectTreePt(r.at);
     for (let i = 0; i < 7; i++) {
       addPart({
@@ -974,6 +1035,7 @@
 
   function doTimeLapse() {
     if (guardPreview()) return;
+    appendEvent(['L', S.simT, 3600]);
     renderStepFx(SIM.advance(S, 3600, false), true);
     toast('⏩ one hour passes…');
     statsCache = tree.stats();
@@ -986,15 +1048,19 @@
     drawSandBase();
     drawStarterPattern();
     sandTexture.needsUpdate = true;
-    S = SIM.newState({
+    dna = {
+      v: 2,
       seed: (Math.random() * 0xffffffff) >>> 0,
       g: Date.now(),
-      south: B.Weather.st.lat !== null && B.Weather.st.lat < 0,
-    });
+      s: B.Weather.st.lat !== null && B.Weather.st.lat < 0 ? 1 : 0,
+      t: 0,
+      e: [],
+    };
+    S = SIM.replay(dna);
     tree = S.tree; res = S.res;
     pendingSec = 0;
     statsCache = tree.stats();
-    decals = []; decalsDirty = true; treeKey = ''; springs = [];
+    decals = []; decalsDirty = true; treeKey = '';
     toast('🌱 a brand-new bonsai arrives!');
     updateAll(); save();
   }
@@ -1011,7 +1077,6 @@
     }
     if (out.startedDying && !res.dead) toast('🥀 the tree is fading — it needs water and care, fast!');
     if (out.died) {
-      springs = [];
       treeKey = '';
       closeBranchMenu();
       if (mode !== 'view') setMode('view');
@@ -1032,7 +1097,10 @@
   function offlineAdvance(rawSec) {
     const adv = Math.min(rawSec, SIM.OFFLINE_CAP_S);
     const offS = Math.floor(adv / SIM.STEP_S) * SIM.STEP_S;
-    if (offS > 0) renderStepFx(SIM.advance(S, offS, true), false);
+    if (offS > 0) {
+      appendEvent(['O', S.simT, offS]);
+      renderStepFx(SIM.advance(S, offS, true), false);
+    }
     pendingSec += adv - offS;
     runPending(false);
     return offS;
@@ -1043,7 +1111,12 @@
     const dtSec = clamp((now - lastTick) / 1000, 0, 72 * 3600);
     lastTick = now;
     if (dtSec > 3600) offlineAdvance(dtSec);
-    else { pendingSec += dtSec; runPending(true); }
+    else {
+      pendingSec += dtSec;
+      // never step mid-bend: live micro-bends are provisional, and growth off a
+      // provisionally-bent branch would diverge from what the log replays
+      if (!drag || drag.type !== 'bend') runPending(true);
+    }
     lastEnv = B.Weather.env(new Date());
     if (lastEnv.raining && sandCtx) {           // rain slowly smooths the raked sand
       sandFade += dtSec / 3600;
@@ -1062,19 +1135,43 @@
   }
 
   // ---------- persistence
+  // v2: the envelope (seed + action log) IS the tree — no geometry is stored.
+  // Everything else here is cosmetic or non-canonical local scheduling state.
   function save() {
     lastSaveAt = Date.now();
+    dna.t = S.simT;
     store.set(KEY, JSON.stringify({
-      v: 1, ts: Date.now(),
-      res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
+      v: 2, ts: Date.now(), pendingSec: Math.floor(pendingSec),
+      dna,
+      theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
       pan: Math.round(panY * 100) / 100, pix2: WALLPAPER ? savedPix : resIdx,
-      gp: S.gp, burnH: S.burnH, soggy: S.soggy, trim: Math.round(S.trimBoost * 100) / 100,
-      dying: Math.round(S.dyingH * 10) / 10,
       decals: decals.slice(-48),
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
-      tree: tree.serialize(),
     }));
+  }
+
+  // A v1 save carries stored geometry — wrap it as a genesis snapshot so the
+  // envelope stays the single source of truth from here on.
+  function migrateV1(data) {
+    return {
+      v: 2,
+      seed: 0,
+      g: data.ts || Date.now(),
+      s: data.wx && typeof data.wx.lat === 'number' && data.wx.lat < 0 ? 1 : 0,
+      t: 0,
+      e: [],
+      snap: {
+        tree: data.tree,
+        res: data.res || undefined,
+        gp: data.gp || 0,
+        burnH: typeof data.burnH === 'number' ? data.burnH
+          : data.burnUntil ? Math.max(0, (data.burnUntil - Date.now()) / 3600e3) : 0,
+        soggy: data.soggy || 0,
+        trim: data.trim || 0,
+        dying: data.dying || 0,
+      },
+    };
   }
 
   // ---------- FX overlay (screen-space pixel particles)
@@ -1355,12 +1452,10 @@
       if (!seg) return;
       if (seg.wired) {
         requestUnwire(id);
-      } else if (tree.wire(id, true) !== null) {
-        cancelSpring(id);
+      } else if (doWire(id)) {
         const mo = Math.max(1, Math.round(tree.wireSetHours(seg) / 720));
         toast(`➰ wire on — drag the branch to bend · needs ~${mo} month${mo > 1 ? 's' : ''} to set` + (WALLPAPER ? ' · tap empty space to finish' : ''));
         if (mode !== 'wire') setMode('wire');   // ready to bend right away
-        save();
       }
     };
     document.addEventListener('pointerdown', (e) => {
@@ -1539,15 +1634,6 @@
       if (Math.abs(thetaVel) < 0.0001) thetaVel = 0;
     }
     if (WALLPAPER && !drag && tms - lastInteract > 30000) theta += dt * 0.02;  // idle: slow turntable
-    if (springs.length) {   // early-unwired branches ease back toward their old direction
-      for (let i = springs.length - 1; i >= 0; i--) {
-        const sp = springs[i];
-        const step = Math.min(sp.remaining, Math.max(0.003, sp.remaining * dt * 1.8));
-        if (!tree.nudge(sp.id, sp.axis, step)) { springs.splice(i, 1); continue; }
-        sp.remaining -= step;
-        if (sp.remaining < 0.005) springs.splice(i, 1);
-      }
-    }
     rotGroup.rotation.y = theta;
     const swayA = lastEnv ? lastEnv.sway : 0.3;
     treeMesh.rotation.z = Math.sin(tms / 625) * 0.012 * swayA;
@@ -1567,30 +1653,26 @@
     }
     let data = null;
     try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { data = null; }
-    if (data && data.v !== 1) data = null;
+    if (data && data.v === 1) data.dna = migrateV1(data);
+    if (data && (!data.dna || data.dna.v !== 2)) data = null;
 
-    // Sim calendar anchors at the save's timestamp; offline catch-up walks it to now.
-    S = SIM.newState({
-      tree: new B.TreeModel(data ? data.tree : null),
-      g: data && data.ts ? data.ts : Date.now(),
-    });
+    if (data) {
+      dna = data.dna;
+      B.Weather.hydrate(data.wx);
+    } else {
+      dna = { v: 2, seed: (Math.random() * 0xffffffff) >>> 0, g: Date.now(), s: 0, t: 0, e: [] };
+    }
+    // Boot IS a replay — the envelope is the only authority on the tree.
+    S = SIM.replay(dna);
     tree = S.tree; res = S.res;
+    pendingSec = data && typeof data.pendingSec === 'number' ? data.pendingSec : 0;
+    statsCache = tree.stats();
     const hashTheta = /theta=(-?[\d.]+)/.exec(location.hash);
     if (hashTheta) theta = parseFloat(hashTheta[1]);
     if (data) {
-      Object.assign(res, data.res || {});
       if (!hashTheta) theta = typeof data.theta === 'number' ? data.theta : -0.55;
-      S.gp = data.gp || 0;
-      S.burnH = typeof data.burnH === 'number' ? data.burnH
-        : data.burnUntil ? Math.max(0, (data.burnUntil - Date.now()) / 3600e3) : 0;
-      S.soggy = data.soggy || 0;
-      S.trimBoost = data.trim || 0;
-      S.dyingH = data.dying || 0;
       decals = Array.isArray(data.decals) ? data.decals : [];
-      B.Weather.hydrate(data.wx);
     }
-    S.south = B.Weather.st.lat !== null && B.Weather.st.lat < 0;
-    statsCache = tree.stats();
 
     try { setupScene(); } catch (e) {
       return fatal('😢 WebGL is unavailable in this browser, and the bonsai needs it to grow. (' + e.message + ')');
@@ -1623,8 +1705,11 @@
       get tree() { return tree; },
       get res() { return res; },
       get sim() { return S; },
-      simulate: (seconds, opts) => {
-        renderStepFx(SIM.advance(S, Math.ceil(seconds / SIM.STEP_S) * SIM.STEP_S, !!(opts && opts.offline)), false);
+      simulate: (seconds, opts) => {   // dev/test time injection — logged so replay stays truthful
+        const off = !!(opts && opts.offline);
+        const quanta = Math.ceil(seconds / SIM.STEP_S) * SIM.STEP_S;
+        appendEvent([off ? 'O' : 'L', S.simT, quanta]);
+        renderStepFx(SIM.advance(S, quanta, off), false);
         statsCache = tree.stats();
         updateAll();
       },
@@ -1652,7 +1737,11 @@
       },
     };
     const hashFF = /ff=(\d+)/.exec(location.hash);   // #ff=N — dev: fast-forward N hours
-    if (hashFF) SIM.advance(S, parseInt(hashFF[1], 10) * 3600, false);
+    if (hashFF) {
+      const secs = parseInt(hashFF[1], 10) * 3600;
+      appendEvent(['L', S.simT, secs]);
+      SIM.advance(S, secs, false);
+    }
     buildUI();
     bindInput();
     lastEnv = B.Weather.env(new Date());
@@ -1672,7 +1761,19 @@
       toast('🌸 your bonsai has arrived! drag the pot to rotate — try ⏩ to watch it grow', { ms: 6500 });
     }
 
-    B.Weather.onUpdate = () => { lastEnv = B.Weather.env(new Date()); updateChips(); updateStatus(); };
+    B.Weather.onUpdate = () => {
+      lastEnv = B.Weather.env(new Date());
+      updateChips(); updateStatus();
+      // Hemisphere is frozen at genesis, but a brand-new tree that only now
+      // learned its real location (first weather fix) re-mints with the right
+      // seasons — only while its history is still empty and young.
+      const south = B.Weather.st.lat !== null && B.Weather.st.lat < 0;
+      if (!dna.snap && dna.e.length === 0 && S.simT < 86400 && (dna.s === 1) !== south) {
+        dna.s = south ? 1 : 0;
+        rebuildFromLog();
+        save();
+      }
+    };
     B.Weather.init();
 
     updateAll();

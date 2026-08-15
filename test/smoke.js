@@ -285,4 +285,110 @@ function careFor(st) {   // keep the tree alive without touching the RNG stream
   ok(d1.tree.segs.size === seg0 && d1.res.health === 0, 'a dead tree neither grows nor recovers');
 }
 
+console.log('event log + replay (the envelope IS the tree)');
+{
+  // a scripted "live session": time passes, the player waters/feeds/prunes/wires,
+  // every action logged exactly the way game.js logs it
+  const env2 = { v: 2, seed: 1234, g: G0, s: 0, t: 0, e: [] };
+  const live = SIM.newState({ seed: env2.seed, g: env2.g });
+  const act = (ev) => { const out = SIM.applyAction(live, ev); if (out.ok) env2.e.push(ev); return out; };
+  const passTime = (sec, off) => {
+    if (off) env2.e.push(['O', live.simT, sec]);
+    SIM.advance(live, sec, !!off);
+  };
+  const careDay = (i) => {   // twice-daily watering keeps up with the drain
+    act(['W', live.simT]);
+    if (i % 3 === 0) act(['F', live.simT]);
+    passTime(43200);
+    act(['W', live.simT]); act(['M', live.simT]);
+    passTime(43200);
+  };
+  for (let i = 0; i < 6; i++) careDay(i);                     // a live week-ish
+  passTime(2 * 86400, true);                                  // away for 2 days
+  for (let i = 0; i < 4; i++) careDay(i);
+  const branch2 = [...live.tree.segs.values()].find(s => s.pid !== null && s.children.length && !(s.order === 0 && s.thick > 5));
+  ok(!!branch2 && act(['C', live.simT, branch2.id]).ok, 'live cut accepted');
+  careDay(1);
+  const wireable = [...live.tree.segs.values()].find(s => s.pid !== null && !s.cut && s.order >= 1);
+  ok(!!wireable && act(['w', live.simT, wireable.id]).ok, 'live wire accepted');
+  const qb = SIM.quantBend([0.2, 0.1, 0.97], 0.31);
+  act(['B', live.simT, wireable.id, qb.ax, qb.ay, qb.az, qb.a]);
+  careDay(2);
+  act(['u', live.simT, wireable.id]);                          // early unwire → canonical spring-back
+  for (let i = 0; i < 3; i++) careDay(i);
+  const pad2 = [...live.tree.segs.values()].find(s => !s.children.length && !s.cut && live.tree.leafRadius(s) >= 2);
+  if (pad2) act(['P', live.simT, pad2.id]);
+  careDay(0); careDay(1);
+  env2.t = live.simT;
+
+  const replayed = SIM.replay(env2);
+  ok(simSnap(replayed) === simSnap(live), 'replay(log) ≡ the live session, bit for bit');
+  ok(replayed.tree.rng.state === live.tree.rng.state, 'RNG stream identical after replay');
+  ok(env2.e.every(ev => ev[1] % SIM.STEP_S === 0 && ev.slice(2).every(Number.isInteger)),
+    'every event sits on a quantum boundary with integer args');
+
+  // canonical string is byte-stable through a JSON round-trip
+  const c1 = SIM.canonical(env2);
+  const c2 = SIM.canonical(JSON.parse(c1));
+  ok(c1 === c2 && JSON.parse(c1).v === 2, `canonical envelope is byte-stable (${c1.length} bytes)`);
+  ok(simSnap(SIM.replay(JSON.parse(c1))) === simSnap(live), 'replay from the canonical string matches too');
+
+  // undo-by-rewind: splicing the cut out replays to a tree that never lost the branch
+  const cutIdx = env2.e.findIndex(ev => ev[0] === 'C');
+  const rewound = { ...env2, e: env2.e.filter((_, i) => i !== cutIdx) };
+  const rr = SIM.replay(rewound);
+  ok(rr.tree.segs.size >= replayed.tree.segs.size, 'rewinding the cut replays a fuller tree');
+
+  // guards hold in replay: a hand-edited log can't act on a dead tree
+  const deadEnv = { v: 2, seed: 5, g: G0, s: 0, t: 12 * 86400, e: [['W', 10 * 86400]] };
+  const deadState = SIM.replay(deadEnv);   // neglect kills it around day 5 — later W is refused
+  ok(!!deadState.res.dead && deadState.res.water <= 35, 'post-death events replay as no-ops');
+}
+{
+  // bend quantization: composing micro-bends then snapping to the quantized net
+  // rotation lands within a hair of the freehand result
+  const V = B.Vec;
+  const s1 = SIM.newState({ seed: 77, g: G0 });
+  for (let d = 0; d < 10; d++) { careFor(s1); SIM.advance(s1, 86400, false); }
+  const seg = [...s1.tree.segs.values()].find(s => s.pid !== null && s.order >= 1 && !s.cut);
+  ok(!!seg, 'found a branch to micro-bend');
+  s1.tree.wire(seg.id, true);
+  let q = [0, 0, 0, 1];
+  const preDirs = new Map();
+  const walk = (s) => { preDirs.set(s.id, s.dir.slice()); for (const c of s.children) walk(c); };
+  walk(seg);
+  for (let i = 0; i < 12; i++) {   // a wiggly drag: varying axes and angles
+    const axis = V.norm([0.1 + 0.05 * i, 0.2, 0.97]);
+    const ang = 0.02 + 0.003 * i;
+    if (s1.tree.bend(seg.id, axis, ang)) q = V.qMul(V.qFromAxisAngle(axis, ang), q);
+  }
+  const freehand = seg.dir.slice();
+  for (const [id, dir] of preDirs) { const s = s1.tree.segs.get(id); if (s) s.dir = dir; }
+  s1.tree.recompute();
+  const net = V.qToAxisAngle(q);
+  const qb2 = SIM.quantBend(net.axis, net.ang);
+  const applied = SIM.applyAction(s1, ['B', s1.simT, seg.id, qb2.ax, qb2.ay, qb2.az, qb2.a]);
+  ok(applied.ok, 'net quantized bend applies');
+  const err = Math.hypot(seg.dir[0] - freehand[0], seg.dir[1] - freehand[1], seg.dir[2] - freehand[2]);
+  ok(err < 0.02, `quantized net bend within a hair of the freehand drag (err ${err.toFixed(4)})`);
+}
+{
+  // v1 → snapshot migration: a legacy tree keeps living inside a v2 envelope
+  const legacyTree = new B.TreeModel({ seed: 11 });
+  for (let d = 0; d < 20; d++) { legacyTree.ageTips(17); legacyTree.grow(60); }
+  const env2 = {
+    v: 2, seed: 0, g: G0, s: 0, t: 0, e: [],
+    snap: { tree: legacyTree.serialize(), res: { water: 40, mist: 50, food: 60, health: 70, dead: 0 }, gp: 0.4, burnH: 2, soggy: 5, trim: 1, dying: 0 },
+  };
+  const m1 = SIM.replay(env2);
+  ok(m1.tree.segs.size === legacyTree.segs.size && m1.res.health === 70 && m1.burnH === 2,
+    'snapshot envelope restores the legacy tree and care state');
+  env2.e.push(['O', 0, 86400]);
+  env2.t = 86400;
+  const m2 = SIM.replay(env2);
+  const m3 = SIM.replay(env2);
+  ok(simSnap(m2) === simSnap(m3), 'life after migration replays deterministically');
+  ok(m2.simT === 86400 && m2.tree.ageHours > legacyTree.ageHours, 'the migrated tree kept growing');
+}
+
 console.log(`\nPASS — ${passed} checks. Tree: ${t.segs.size} segs, height ${t.stats().height.toFixed(1)}, ${t.stats().blossoms} blossoms, ${built.voxels.length} voxels.`);

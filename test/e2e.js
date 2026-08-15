@@ -349,6 +349,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(150);
   const trimCursor = await page.evaluate(() => getComputedStyle(document.querySelector('#view')).cursor);
   check(/svg/.test(trimCursor), 'trim mode shows the pinching-shears cursor');
+  // the UNDO above replayed the log, discarding poked meters — restore health so
+  // foliage renders, and fatten the pads (earlier pinches shrank them); dev cheats
+  await page.evaluate(() => {
+    __bonsai.res.health = 80;
+    const t = __bonsai.tree;
+    for (const s of t.segs.values()) if (!s.children.length && !s.cut) s.tipAge = Math.max(s.tipAge, 30);
+    t.rev++;
+  });
+  await sleep(300);
   const trimTarget = await page.evaluate(() => {
     const t = __bonsai.tree;
     const r = document.querySelector('#view').getBoundingClientRect();
@@ -774,16 +783,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.click('#btn-future'); // close the bar
   await sleep(150);
 
-  // --- persistence: reload and compare
-  const preReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum() }));
+  // --- persistence: reload and compare. Boot replays the action log (the
+  // envelope is the authority), so direct __bonsai.res pokes made above do NOT
+  // survive — replaying the log twice must land on the same tree and meters.
+  const preReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, sand: __bonsai.sandSum() }));
   await page.goto(URL, { waitUntil: 'load' });
   await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
   await page.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
   await sleep(800);
   const postReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum() }));
-  check(postReload.segs === preReload.segs, `reload restored the tree (${postReload.segs} segs)`);
-  check(Math.abs(postReload.water - preReload.water) <= 2, `reload restored meters (water ${postReload.water})`);
+  check(postReload.segs === preReload.segs, `reload replayed the same tree (${postReload.segs} segs)`);
+  check(postReload.water >= 0 && postReload.water <= 100, `reload replayed the meters (water ${postReload.water})`);
   check(postReload.sand === preReload.sand, 'reload restored the raked sand');
+  const reload2 = await (async () => {
+    await page.goto(URL, { waitUntil: 'load' });
+    await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+    await sleep(400);
+    return page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water) }));
+  })();
+  check(reload2.segs === postReload.segs && reload2.water === postReload.water,
+    `replaying the log twice is idempotent (${reload2.segs} segs, water ${reload2.water})`);
 
   // --- wallpaper mode: fullscreen widescreen scene, UI hidden, cut & wire usable
   const wp0 = await browser.newPage();

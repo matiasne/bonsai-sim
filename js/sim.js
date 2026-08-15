@@ -128,6 +128,129 @@
     return out;
   }
 
+  // ---------- actions (the event-log vocabulary)
+  // Events are compact arrays [op, t, ...args] — t = sim-seconds since genesis,
+  // every arg an integer. applyAction owns EVERY gameplay guard so that a log
+  // replays to the same tree no matter who wrote it. Time ops ("O" offline
+  // advance, "L" timelapse) are handled by replay(), not here.
+  //   "W" water · "M" mist · "F" feed · "C" cut(id) · "P" pinch(id)
+  //   "w" wire-on(id) · "u" wire-off(id) · "B" bend(id, ax, ay, az, a)
+  function applyAction(state, ev) {
+    const res = state.res, tree = state.tree, V = B.Vec;
+    if (res.dead) return { ok: false, reason: 'dead' };
+    const op = ev[0];
+    if (op === 'W') {
+      let soggy = false;
+      if (res.water > 90) { state.soggy = Math.min(100, state.soggy + 25); soggy = true; }
+      res.water = clamp(res.water + 35, 0, 100);
+      return { ok: true, soggy };
+    }
+    if (op === 'M') {
+      res.mist = clamp(res.mist + 45, 0, 100);
+      return { ok: true };
+    }
+    if (op === 'F') {
+      res.food = clamp(res.food + 45, 0, 130);
+      const burned = res.food > 100;
+      if (burned) state.burnH = 12;
+      return { ok: true, burned };
+    }
+    if (op === 'C') {
+      const r = tree.cut(ev[2]);
+      return r.ok ? { ok: true, at: r.at, removed: r.removed } : { ok: false, reason: r.reason };
+    }
+    if (op === 'P') {
+      if (res.health < 40) return { ok: false, reason: 'stressed' };
+      const r = tree.trimTip(ev[2]);
+      if (!r.ok) return { ok: false, reason: r.reason };
+      state.trimBoost = Math.min(20, state.trimBoost + 1);
+      res.health = Math.max(30, res.health - 1);
+      return { ok: true, at: r.at };
+    }
+    if (op === 'w') {
+      const seg = tree.segs.get(ev[2]);
+      if (!seg || seg.wired) return { ok: false };
+      return tree.wire(ev[2], true) === null ? { ok: false } : { ok: true };
+    }
+    if (op === 'u') {
+      const seg = tree.segs.get(ev[2]);
+      if (!seg || !seg.wired) return { ok: false };
+      const dir0 = seg.dir0 && seg.dir0.slice();
+      const setFrac = clamp(seg.wireAge / tree.wireSetHours(seg), 0, 1);
+      tree.wire(ev[2], false);
+      let sprung = false;
+      if (dir0) {   // canonical instant spring-back, proportional to how unset it is
+        const axis = V.cross(seg.dir, dir0);
+        const dot = clamp(V.dot(V.norm(seg.dir), V.norm(dir0)), -1, 1);
+        const total = Math.acos(dot) * (1 - setFrac);
+        if (V.len(axis) > 1e-4 && total > 0.02) sprung = tree.nudge(ev[2], V.norm(axis), total);
+      }
+      return { ok: true, sprung, setFrac };
+    }
+    if (op === 'B') {
+      const seg = tree.segs.get(ev[2]);
+      if (!seg || !seg.wired) return { ok: false };
+      const d = decodeBend(ev);
+      if (!d.ang) return { ok: false };
+      return { ok: tree.bend(ev[2], d.axis, d.ang) };
+    }
+    return { ok: false, reason: 'unknown' };
+  }
+
+  // Bends are logged quantized (axis → int8 triple, angle → 1e-4 rad) so the
+  // event is pure integers. Quantize the INPUT only — resulting dirs stay
+  // full-precision (rounding them flips growth gates; see tree.js serialize).
+  function quantBend(axis, ang) {
+    const n = B.Vec.norm(axis);
+    return {
+      ax: Math.round(n[0] * 127), ay: Math.round(n[1] * 127), az: Math.round(n[2] * 127),
+      a: Math.round(ang * 1e4),
+    };
+  }
+  function decodeBend(ev) {
+    const ax = ev[3], ay = ev[4], az = ev[5];
+    if (!ax && !ay && !az) return { axis: [0, 1, 0], ang: 0 };
+    return { axis: B.Vec.norm([ax, ay, az]), ang: ev[6] / 1e4 };
+  }
+
+  // ---------- envelope (the DNA): {v:2, seed, g, s, t, e:[events], snap?}
+  // seed: uint32 · g: genesis wall-clock ms · s: 1 = southern hemisphere ·
+  // t: total sim-seconds · snap: optional checkpoint (legacy v1 migration).
+  function loadSnap(env) {
+    const sn = env.snap;
+    const state = newState({ tree: new B.TreeModel(sn.tree), g: env.g, south: !!env.s });
+    if (sn.res) Object.assign(state.res, sn.res);
+    state.gp = sn.gp || 0;
+    state.burnH = sn.burnH || 0;
+    state.soggy = sn.soggy || 0;
+    state.trimBoost = sn.trim || 0;
+    state.dyingH = sn.dying || 0;
+    return state;
+  }
+
+  // Pure: envelope → sim state. Gap-fills live time between events, applies
+  // O/L time ops and user actions in order, then advances to the envelope's t.
+  function replay(env) {
+    const state = env.snap ? loadSnap(env) : newState({ seed: env.seed, g: env.g, south: !!env.s });
+    for (const ev of env.e || []) {
+      if (ev[1] > state.simT) advance(state, ev[1] - state.simT, false);
+      if (ev[0] === 'O') advance(state, ev[2], true);
+      else if (ev[0] === 'L') advance(state, ev[2], false);
+      else applyAction(state, ev);
+    }
+    if (env.t > state.simT) advance(state, env.t - state.simT, false);
+    return state;
+  }
+
+  // Byte-stable canonical JSON of an envelope — fixed key order, no whitespace.
+  // This exact string is what a DNA URL (and one day a chain) carries.
+  function canonical(env) {
+    let s = '{"v":2,"seed":' + (env.seed >>> 0) + ',"g":' + env.g +
+      ',"s":' + (env.s ? 1 : 0) + ',"t":' + env.t + ',"e":' + JSON.stringify(env.e || []);
+    if (env.snap) s += ',"snap":' + JSON.stringify(env.snap);
+    return s + '}';
+  }
+
   // Advance whole quanta (sub-quantum remainders are the caller's to keep).
   // Aggregated fx events are capped — replays cross years and only the UI cares.
   function advance(state, seconds, off) {
@@ -146,6 +269,7 @@
   B.Sim = {
     STEP_S, STEP_H, DEATH_H, OFFLINE_CAP_S, PACE, SEASON_GROWTH, WIRE_RATE,
     seasonInfo, newState, healthTarget, step, advance,
+    applyAction, quantBend, decodeBend, loadSnap, replay, canonical,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = B;
