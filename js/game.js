@@ -469,7 +469,8 @@
       view.setPointerCapture(e.pointerId);
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) { drag = { type: 'pinch', d: touchDist() }; return; }
-      if (branchMenuSeg !== null) { closeBranchMenu(); return; }   // first click just dismisses
+      const menuWasOpen = branchMenuSeg !== null;   // dismissal swallows only background taps
+      if (menuWasOpen) closeBranchMenu();
       const start = { x: e.clientX, y: e.clientY };
       if (mode === 'prune') {
         const hit = pickAt(e.clientX, e.clientY);
@@ -499,7 +500,10 @@
         drag = { type: 'rotate', lastX: e.clientX, lastY: e.clientY, moved: 0, tap: s.target };
       } else if (mode === 'view') {
         if (s && s.target === 'leaf') drag = { type: 'maybeTap', action: 'mist', segId: s.segId, start };
-        else if (!s) drag = { type: 'maybeTap', action: 'water', start };   // pour from above
+        else if (!s) {
+          // pour from above — unless this tap was just dismissing an open menu
+          if (!menuWasOpen) drag = { type: 'maybeTap', action: 'water', start };
+        }
         else if (s && s.target === 'wire' && !previewTree) {
           // grab a placed wire: bend its branch right away (tap still opens the menu)
           drag = { type: 'bend', segId: s.segId, lastX: e.clientX, lastY: e.clientY, moved: 0, fromView: true };
@@ -752,9 +756,19 @@
     const stack = $('#canvas-stack').getBoundingClientRect();
     branchMenuEl.classList.remove('hidden');
     const mw = branchMenuEl.offsetWidth || 130, mh = branchMenuEl.offsetHeight || 34;
-    // keep clear daylight between the cursor and the buttons
-    branchMenuEl.style.left = clamp(clientX - stack.left - mw / 2 + 18, 4, stack.width - mw - 4) + 'px';
-    branchMenuEl.style.top = clamp(clientY - stack.top - mh - 28, 4, stack.height - mh - 4) + 'px';
+    if (pad && canopy) {
+      // the TRIM button lives in one predictable spot: right above the tree
+      const a = projectLocalPt(canopy.x, canopy.maxY + 3, canopy.z);
+      const r = view.getBoundingClientRect();
+      const ax = (r.left - stack.left) + (a.x / BUFW) * r.width;
+      const ay = (r.top - stack.top) + (a.y / BUFH) * r.height;
+      branchMenuEl.style.left = clamp(ax - mw / 2, 4, stack.width - mw - 4) + 'px';
+      branchMenuEl.style.top = clamp(ay - mh - 6, 4, stack.height - mh - 4) + 'px';
+    } else {
+      // branch ✂️/➰ menu: near the tap, with daylight from the cursor
+      branchMenuEl.style.left = clamp(clientX - stack.left - mw / 2 + 18, 4, stack.width - mw - 4) + 'px';
+      branchMenuEl.style.top = clamp(clientY - stack.top - mh - 28, 4, stack.height - mh - 4) + 'px';
+    }
     if (pad) branchMenuTimer = setTimeout(closeBranchMenu, 5000);   // fades back to normal
   }
   function closeBranchMenu() {

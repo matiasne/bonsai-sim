@@ -125,6 +125,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       r: __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)),
     }), blossomNow.id);
     check(padMenu.open && padMenu.trimVisible && padMenu.cutHidden, 'pad tap shows a lone TRIM button');
+    const trimBtnPos = await page.evaluate(() => {
+      const m = document.querySelector('#branch-menu').getBoundingClientRect();
+      const v = document.querySelector('#view').getBoundingClientRect();
+      return (m.top + m.height / 2 - v.top) / v.height;
+    });
+    check(trimBtnPos < 0.6, `the TRIM button sits above the tree (${(trimBtnPos * 100).toFixed(0)}% down the scene)`);
     if (padMenu.open && padMenu.trimVisible) {
       await page.evaluate(() => document.querySelector('#bm-trim').click());
       await sleep(300);
@@ -140,6 +146,16 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       openNow = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
     }
     if (openNow) {
+      // tapping another pad while the button shows must keep working (no dead taps)
+      const b3 = await findBlossom();
+      if (b3) {
+        await page.mouse.click(b3.x, b3.y);
+        await sleep(300);
+        const stillOpen = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+        check(stillOpen, 'tapping another pad while the button shows re-offers immediately');
+      } else {
+        check(true, 'no third blossom for the consecutive-tap check — skipped');
+      }
       await sleep(5300);
       const openLater = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
       check(!openLater, 'the TRIM option disappears by itself after 5 seconds');
