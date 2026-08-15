@@ -368,11 +368,11 @@ html.wallpaper #panel,
 html.wallpaper #actions,
 html.wallpaper #status-line,
 html.wallpaper footer,
-html.wallpaper #toasts,
 html.wallpaper #zoom-ctl,
 html.wallpaper #future-bar,
-html.wallpaper #branch-menu,
 html.wallpaper .modal { display: none !important; }
+/* the branch ✂️/➰ menu and toasts (cut-undo, wire feedback) stay usable on the desktop */
+html.wallpaper #toasts { bottom: 48px; }
 html.wallpaper #stage-frame { min-width: 0; }
 html.wallpaper #canvas-stack {
   position: fixed;

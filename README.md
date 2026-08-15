@@ -51,6 +51,10 @@ Enable mouse input in the wallpaper's settings to interact with the tree.
 (`file:///path/to/bonsai-sim/wallpaper.html`) and grant folder access. Turn on *Browsing Mode*
 whenever you want to water/prune/rotate; turn it off to click through to your desktop.
 
+With input enabled you can do **everything right on the desktop**: drag the pot, tap to
+water/mist/feed — and tap a branch for the ✂️ cut / ➰ wire menu (cut offers a brief UNDO;
+after wiring, drag the branch to bend, then tap empty space to put the tool away).
+
 Notes: each wallpaper app has its own browser storage, so the wallpaper keeps **its own bonsai**
 (separate from your browser's). Everything works offline except the first three.js load and weather.
 

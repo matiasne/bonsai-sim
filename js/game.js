@@ -354,6 +354,8 @@
         else if (s && (s.target === 'wood' || s.target === 'wire') && !previewTree) {
           drag = { type: 'maybeBranch', segId: s.segId, start };            // tap → ✂️/➰ menu
         }
+      } else if (WALLPAPER) {
+        setMode('view');   // no toolbar on the desktop: tap empty space to put the tool away
       }
     });
 
@@ -974,7 +976,7 @@
         toast('➰ wire removed');
         save();
       } else if (tree.wire(id, true) !== null) {
-        toast('➰ wire on — drag the branch to bend · sets in ~2 days');
+        toast('➰ wire on — drag the branch to bend · sets in ~2 days' + (WALLPAPER ? ' · tap empty space to finish' : ''));
         if (mode !== 'wire') setMode('wire');   // ready to bend right away
         save();
       }
