@@ -33,6 +33,26 @@
       const l = Math.hypot(a[0], a[1], a[2]);
       return l < 1e-9 ? [0, 1, 0] : [a[0] / l, a[1] / l, a[2] / l];
     },
+    // quaternions as [x,y,z,w] — for composing a bend-drag's many micro
+    // rotations into the single net rotation the action log records
+    qFromAxisAngle(axis, ang) {
+      const a = V.norm(axis), s = Math.sin(ang / 2);
+      return [a[0] * s, a[1] * s, a[2] * s, Math.cos(ang / 2)];
+    },
+    qMul(a, b) {
+      return [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+      ];
+    },
+    qToAxisAngle(q) {
+      const w = Math.min(1, Math.max(-1, q[3]));
+      const ang = 2 * Math.acos(w);
+      const s = Math.sqrt(Math.max(0, 1 - w * w));
+      return s < 1e-6 ? { axis: [0, 1, 0], ang: 0 } : { axis: [q[0] / s, q[1] / s, q[2] / s], ang };
+    },
     rotate(u, axis, ang) { // Rodrigues
       const a = V.norm(axis), c = Math.cos(ang), s = Math.sin(ang);
       const cr = V.cross(a, u), k = V.dot(a, u) * (1 - c);
@@ -59,11 +79,13 @@
   };
 
   class TreeModel {
+    // save: a serialize() blob to restore, {seed: uint32} for a canonical fresh
+    // tree, or null/undefined for a fresh tree with a random seed.
     constructor(save) {
       this.rev = 0;
-      if (save) this._load(save);
+      if (save && save.segs) this._load(save);
       else {
-        this.rng = makeRng();
+        this.rng = makeRng(save && save.seed !== undefined ? save.seed >>> 0 : undefined);
         this.ageHours = 48;
         this._seed();
       }

@@ -5,6 +5,7 @@ const path = require('path');
 const assert = require('assert');
 
 require(path.join(__dirname, '..', 'js', 'tree.js'));
+require(path.join(__dirname, '..', 'js', 'sim.js'));
 require(path.join(__dirname, '..', 'js', 'voxels.js'));
 require(path.join(__dirname, '..', 'js', 'weather.js'));
 const B = globalThis.Bonsai;
@@ -222,5 +223,66 @@ ok(envBloom.bloom === true && envBloom.seasonGrowth > 1, 'spring bloom + flush v
 B.Weather.forceSeason = null;
 ok(B.Voxels.PAL.leafGreen.length === 4 && B.Voxels.PAL.leafAutumn.length === 4, 'seasonal foliage palettes present');
 ok(typeof envDay.emoji === 'string', 'weather emoji present');
+
+console.log('sim core (deterministic fixed-step integrator)');
+const SIM = B.Sim;
+const G0 = Date.UTC(2026, 3, 1);   // April 1 — mid-spring in the north
+{
+  const a = SIM.seasonInfo(G0, false), b = SIM.seasonInfo(G0, false);
+  ok(JSON.stringify(a) === JSON.stringify(b), 'seasonInfo is pure');
+  ok(a.season === 'spring' && a.seasonGrowth === 1.25, `April is spring in the north (${a.season})`);
+  ok(SIM.seasonInfo(G0, true).season === 'autumn', 'April is autumn in the south');
+  ok(SIM.seasonInfo(Date.UTC(2026, 0, 10), false).foodMul === 0.25, 'winter slows food decay');
+}
+function simSnap(st) {
+  return JSON.stringify({
+    tree: st.tree.serialize(), res: st.res, gp: st.gp, burnH: st.burnH,
+    soggy: st.soggy, trim: st.trimBoost, dying: st.dyingH, simT: st.simT,
+  });
+}
+function careFor(st) {   // keep the tree alive without touching the RNG stream
+  const r = st.res;
+  if (r.water < 45) r.water = Math.min(100, r.water + 35);
+  if (r.mist < 40) r.mist = Math.min(100, r.mist + 45);
+  if (r.food < 40) r.food = Math.min(100, r.food + 45);
+}
+{
+  // step-size invariance: 30 days in one call ≡ 30 × 1-day calls (with identical care)
+  const sA = SIM.newState({ seed: 42, g: G0 });
+  const sB = SIM.newState({ seed: 42, g: G0 });
+  ok(simSnap(sA) === simSnap(sB), 'same seed → identical fresh state');
+  for (let d = 0; d < 30; d++) { careFor(sA); SIM.advance(sA, 86400, false); }
+  const sBcare = () => { careFor(sB); return 86400 / SIM.STEP_S; };
+  for (let d = 0; d < 30; d++) { let n = sBcare(); while (n-- > 0) SIM.step(sB, false); }
+  ok(simSnap(sA) === simSnap(sB), 'advance(1d)×30 ≡ step()×2880 — no step-size drift');
+  ok(sA.simT === 30 * 86400, `simT advanced exactly 30 days (${sA.simT})`);
+  ok(sA.tree.segs.size > 8, `30 spring days grew the tree (${sA.tree.segs.size} segs)`);
+  ok(sA.tree.rng.state === sB.tree.rng.state, 'RNG streams stayed in lockstep');
+}
+{
+  // offline rules differ from live rules, deterministically
+  const live = SIM.newState({ seed: 7, g: G0 });
+  const off1 = SIM.newState({ seed: 7, g: G0 });
+  const off2 = SIM.newState({ seed: 7, g: G0 });
+  SIM.advance(live, 48 * 3600, false);
+  SIM.advance(off1, 48 * 3600, true);
+  SIM.advance(off2, 48 * 3600, true);
+  ok(simSnap(off1) === simSnap(off2), 'offline advance is deterministic');
+  ok(off1.gp !== live.gp || off1.tree.segs.size !== live.tree.segs.size, 'offline half-pace differs from live');
+  ok(off1.res.health >= 12, `offline health floor holds (${off1.res.health.toFixed(1)})`);
+}
+{
+  // death by neglect is an emergent, deterministic outcome
+  const d1 = SIM.newState({ seed: 99, g: G0 });
+  const d2 = SIM.newState({ seed: 99, g: G0 });
+  let guard = 40 * 96;   // up to 40 days
+  while (!d1.res.dead && guard-- > 0) SIM.step(d1, false);
+  while (!d2.res.dead && d2.simT < d1.simT) SIM.step(d2, false);
+  ok(!!d1.res.dead, `neglected tree died (day ${(d1.res.dead / 86400).toFixed(1)})`);
+  ok(d1.res.dead === d2.res.dead, 'death lands at the same deterministic simT');
+  const seg0 = d1.tree.segs.size;
+  SIM.advance(d1, 86400, false);
+  ok(d1.tree.segs.size === seg0 && d1.res.health === 0, 'a dead tree neither grows nor recovers');
+}
 
 console.log(`\nPASS — ${passed} checks. Tree: ${t.segs.size} segs, height ${t.stats().height.toFixed(1)}, ${t.stats().blossoms} blossoms, ${built.voxels.length} voxels.`);

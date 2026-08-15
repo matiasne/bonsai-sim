@@ -4,6 +4,7 @@
   const B = window.Bonsai;
   const GEO = B.Voxels.GEO;
   const PAL = B.Voxels.PAL;
+  const SIM = B.Sim;
 
   // ---------- constants
   const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
@@ -100,17 +101,15 @@
   };
 
   // ---------- state
-  let tree = null;
-  const res = { water: 72, mist: 60, food: 55, health: 82 };
+  let S = null;       // deterministic sim state (B.Sim): tree, res, gp, burnH, soggy, trimBoost, dyingH, simT
+  let tree = null;    // alias of S.tree — rebound on boot/freshTree
+  let res = null;     // alias of S.res
+  let pendingSec = 0; // wall-clock time not yet folded into the sim (sub-quantum remainder)
   let theta = -0.55, thetaVel = 0;
   let zoom = 1, panY = 0;
   let mode = 'view';
   let previewTree = null, previewYears = 0, futureBarOpen = false;
   const previewCache = new Map();
-  let gp = 0, burnUntil = 0, soggy = 0;
-  let trimBoost = 0;  // recent pinching lets light into the crown → growth buff
-  let dyingH = 0;     // hours spent in critical condition — reaches DEATH_H and the tree dies
-  const DEATH_H = 96; // ~4 days at rock-bottom health; recovery winds it back down
   let decals = [], decalsDirty = true;
   let springs = [];   // branches easing back after an early unwire
   let lastEnv = null, statsCache = null;
@@ -903,7 +902,7 @@
   function doWater() {
     if (guardPreview() || guardDead()) return;
     if (res.water > 90) {
-      soggy = Math.min(100, soggy + 25);
+      S.soggy = Math.min(100, S.soggy + 25);
       toast('🫧 soggy! the soil is already drenched…');
     } else {
       toast(pick(['💧 a good soak', '💧 glug glug…', '💧 the roots drink deep']));
@@ -923,7 +922,7 @@
     if (guardPreview() || guardDead()) return;
     res.food = clamp(res.food + 45, 0, 130);
     if (res.food > 100) {
-      burnUntil = Date.now() + 12 * 3600e3;
+      S.burnH = 12;
       toast('🔥 fertilizer burn! go easy for a while…');
     } else {
       toast(pick(['🧪 nom nom — growth boost!', '🧪 pellets sprinkled on the soil']));
@@ -946,7 +945,7 @@
       if (r.reason === 'small') toast('🍃 that pad is already tender');
       return;
     }
-    trimBoost = Math.min(20, trimBoost + 1);
+    S.trimBoost = Math.min(20, S.trimBoost + 1);
     res.health = Math.max(30, res.health - 1);
     const p = projectTreePt(r.at);
     for (let i = 0; i < 7; i++) {
@@ -975,8 +974,9 @@
 
   function doTimeLapse() {
     if (guardPreview()) return;
-    simulate(3600, { offline: false, fx: true });
+    renderStepFx(SIM.advance(S, 3600, false), true);
     toast('⏩ one hour passes…');
+    statsCache = tree.stats();
     updateAll(); save();
   }
 
@@ -986,51 +986,67 @@
     drawSandBase();
     drawStarterPattern();
     sandTexture.needsUpdate = true;
-    tree = new B.TreeModel();
-    Object.assign(res, { water: 72, mist: 60, food: 55, health: 82, dead: 0 });
-    gp = 0; burnUntil = 0; soggy = 0; trimBoost = 0; dyingH = 0; decals = []; decalsDirty = true; treeKey = ''; springs = [];
-    window.__bonsai.tree = tree;
+    S = SIM.newState({
+      seed: (Math.random() * 0xffffffff) >>> 0,
+      g: Date.now(),
+      south: B.Weather.st.lat !== null && B.Weather.st.lat < 0,
+    });
+    tree = S.tree; res = S.res;
+    pendingSec = 0;
+    statsCache = tree.stats();
+    decals = []; decalsDirty = true; treeKey = ''; springs = [];
     toast('🌱 a brand-new bonsai arrives!');
     updateAll(); save();
   }
 
-  // ---------- simulation
-  function healthTarget(env) {
-    const w = res.water, m = res.mist, f = res.food;
-    let t = 1;
-    t *= w < 8 ? 0.15 : w < 30 ? 0.35 + ((w - 8) / 22) * 0.5 : 1;
-    t *= m < 12 ? 0.85 : m < 35 ? 0.93 : 1;
-    t *= f < 8 ? 0.88 : f <= 100 ? 1 : 0.9;
-    if (burnUntil > Date.now()) t *= 0.68;
-    t *= 1 - Math.min(0.3, soggy * 0.003);
-    if (env.frost) t *= 0.85;
-    if (env.temp >= 36 && env.ok) t *= 0.85;
-    if (statsCache && statsCache.tips >= 20) t *= 0.9;
-    return 100 * t;
+  // ---------- simulation (the deterministic core lives in js/sim.js — game.js
+  // only schedules wall-clock time into fixed quanta and renders the outcomes)
+  function renderStepFx(out, fx) {
+    if (fx) {
+      for (const e of out.grow) sparkleFX(projectTreePt(e.at));
+      for (const r of out.newlySet) {
+        sparkleFX(projectTreePt(r.at));
+        toast('✅ the branch has set — remove the wire whenever you like');
+      }
+    }
+    if (out.startedDying && !res.dead) toast('🥀 the tree is fading — it needs water and care, fast!');
+    if (out.died) {
+      springs = [];
+      treeKey = '';
+      closeBranchMenu();
+      if (mode !== 'view') setMode('view');
+      toast('🪦 the little tree has withered away…', { ms: 14000, action: { label: '🌱 NEW TREE', fn: freshTree } });
+      save();
+    }
   }
 
-  function stepSim(dtH, opts) {
-    const env = B.Weather.env(new Date());
-    lastEnv = env;
-    const off = !!(opts && opts.offline);
-
-    if (res.dead) {                       // nothing drinks, nothing grows
-      res.water = clamp(res.water - dtH * 3, 0, 100);
-      res.mist = clamp(res.mist - dtH * 7, 0, 100);
-      res.food = clamp(res.food - dtH, 0, 130);
-      res.health = 0;
-      return;
+  function runPending(fx) {
+    while (pendingSec >= SIM.STEP_S) {
+      pendingSec -= SIM.STEP_S;
+      renderStepFx(SIM.step(S, false), fx);
     }
+  }
 
-    res.water = clamp(res.water - dtH * (100 / 34) * env.dryMul, 0, 100);
-    if (env.rainWater) res.water = Math.max(res.water, Math.min(88, res.water + dtH * env.rainWater));
-    let mistIn = 0;
-    if (env.raining) mistIn += dtH * 10;
-    if (env.kind === 'fog') mistIn += dtH * 8;
-    res.mist = clamp(res.mist - dtH * (100 / 14) * env.mistMul + mistIn, 0, 100);
-    res.food = clamp(res.food - dtH * (100 / 110) * (env.season === 'winter' ? 0.25 : 1), 0, 130);
-    if (env.raining && !off && sandCtx) {       // rain slowly smooths the raked sand
-      sandFade += dtH;
+  // A long absence (machine slept, tab frozen, app closed): capped, half-pace
+  // offline catch-up in whole quanta; the remainder joins the live accumulator.
+  function offlineAdvance(rawSec) {
+    const adv = Math.min(rawSec, SIM.OFFLINE_CAP_S);
+    const offS = Math.floor(adv / SIM.STEP_S) * SIM.STEP_S;
+    if (offS > 0) renderStepFx(SIM.advance(S, offS, true), false);
+    pendingSec += adv - offS;
+    runPending(false);
+    return offS;
+  }
+
+  function tick() {
+    const now = Date.now();
+    const dtSec = clamp((now - lastTick) / 1000, 0, 72 * 3600);
+    lastTick = now;
+    if (dtSec > 3600) offlineAdvance(dtSec);
+    else { pendingSec += dtSec; runPending(true); }
+    lastEnv = B.Weather.env(new Date());
+    if (lastEnv.raining && sandCtx) {           // rain slowly smooths the raked sand
+      sandFade += dtSec / 3600;
       if (sandFade > 0.03) {
         sandFade = 0;
         sandCtx.globalAlpha = 0.05;
@@ -1040,70 +1056,7 @@
         sandTexture.needsUpdate = true;
       }
     }
-    if (burnUntil && Date.now() > burnUntil) burnUntil = 0;
-    if (soggy > 0) soggy = Math.max(0, soggy - dtH * 8);
-
     statsCache = tree.stats();
-    const target = healthTarget(env);
-    res.health = clamp(res.health + clamp(target - res.health, -9 * dtH, 7 * dtH), off ? 12 : 5, 100);
-
-    if (res.health <= 15) {               // critical — the tree is slowly dying
-      if (dyingH === 0 && opts && opts.fx) toast('🥀 the tree is fading — it needs water and care, fast!');
-      dyingH += dtH;
-      if (dyingH >= DEATH_H) {
-        res.dead = Date.now();
-        res.health = 0;
-        springs = []; trimBoost = 0;
-        treeKey = '';
-        closeBranchMenu();
-        if (mode !== 'view') setMode('view');
-        toast('🪦 the little tree has withered away…', { ms: 14000, action: { label: '🌱 NEW TREE', fn: freshTree } });
-        save();
-        return;
-      }
-    } else if (res.health >= 30) {
-      dyingH = Math.max(0, dyingH - dtH * 2);
-    }
-
-    const segs = tree.segs.size;
-    const juv = segs < 26 ? 4.5 : segs < 60 ? 2 : 1;
-    const hf = res.health < 25 ? 0.06 : res.health < 60 ? 0.1 + ((res.health - 25) / 35) * 0.8 : 1;
-    const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
-    trimBoost *= Math.pow(0.98, dtH);                       // the opened crown closes again
-    const tb = 1 + Math.min(0.18, trimBoost * 0.012);       // light reaches the interior
-    gp += 1.4 * dtH * env.growth * hf * ff * tb * juv * (off ? 0.5 : 1);   // ~real-life/5 pace
-    tree.ageTips(dtH * env.growth * hf * 1.2);
-    const nowSet = tree.ageWires(dtH, env.wireRate);
-    if (nowSet.length && opts && opts.fx) {
-      for (const r of nowSet) {
-        sparkleFX(projectTreePt(r.at));
-        toast('✅ the branch has set — remove the wire whenever you like');
-      }
-    }
-    if (gp >= 1) {
-      const n = Math.min(30, Math.floor(gp));
-      gp -= n;
-      const evs = tree.grow(n);
-      if (opts && opts.fx) for (const e of evs) sparkleFX(projectTreePt(e.at));
-    }
-  }
-
-  function simulate(seconds, opts) {
-    let rem = seconds;
-    let guard = 400;
-    while (rem > 0 && guard-- > 0) {
-      const dt = Math.min(900, rem);
-      rem -= dt;
-      stepSim(dt / 3600, opts);
-    }
-  }
-
-  function tick() {
-    const now = Date.now();
-    const dtSec = clamp((now - lastTick) / 1000, 0, 72 * 3600);
-    lastTick = now;
-    if (dtSec > 5) simulate(dtSec, { offline: dtSec > 600, fx: false });
-    else stepSim(dtSec / 3600, { fx: true });
     updateAll();
     if (now - lastSaveAt > 45000) save();
   }
@@ -1115,8 +1068,8 @@
       v: 1, ts: Date.now(),
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
       pan: Math.round(panY * 100) / 100, pix2: WALLPAPER ? savedPix : resIdx,
-      gp, burnUntil, soggy, trim: Math.round(trimBoost * 100) / 100,
-      dying: Math.round(dyingH * 10) / 10,
+      gp: S.gp, burnH: S.burnH, soggy: S.soggy, trim: Math.round(S.trimBoost * 100) / 100,
+      dying: Math.round(S.dyingH * 10) / 10,
       decals: decals.slice(-48),
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
@@ -1497,14 +1450,14 @@
 
   function careNote() {
     if (res.dead) return '🪦 the tree has passed away — ⚙ NEW TREE plants another';
-    if (dyingH > 0 && res.health <= 20) return `🥀 the tree is dying — about ${Math.max(1, Math.ceil((DEATH_H - dyingH) / 24))}d to save it!`;
+    if (S.dyingH > 0 && res.health <= 20) return `🥀 the tree is dying — about ${Math.max(1, Math.ceil((SIM.DEATH_H - S.dyingH) / 24))}d to save it!`;
     if (res.water < 15) return '💧 the soil is dry — water me!';
-    if (burnUntil > Date.now()) return '🔥 burnt roots — let the fertilizer fade';
-    if (soggy > 30) return '🫧 soggy roots — ease off the watering';
+    if (S.burnH > 0) return '🔥 burnt roots — let the fertilizer fade';
+    if (S.soggy > 30) return '🫧 soggy roots — ease off the watering';
     if (res.mist < 15) return '🌫 dry air — a misting would be lovely';
     if (res.food < 10 && (!lastEnv || lastEnv.season !== 'winter')) return '🧪 hungry — a little fertilizer?';
     if (statsCache && statsCache.tips >= 20) return '✂️ getting bushy — pruning helps it bloom';
-    if (statsCache && statsCache.blossoms >= 14 && trimBoost < 2) return '🍃 dense crown — a trim lets light inside';
+    if (statsCache && statsCache.blossoms >= 14 && S.trimBoost < 2) return '🍃 dense crown — a trim lets light inside';
     let wireLeft = Infinity, anySet = false;
     for (const s of tree.segs.values()) {
       if (!s.wired) continue;
@@ -1616,20 +1569,28 @@
     try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { data = null; }
     if (data && data.v !== 1) data = null;
 
-    tree = new B.TreeModel(data ? data.tree : null);
+    // Sim calendar anchors at the save's timestamp; offline catch-up walks it to now.
+    S = SIM.newState({
+      tree: new B.TreeModel(data ? data.tree : null),
+      g: data && data.ts ? data.ts : Date.now(),
+    });
+    tree = S.tree; res = S.res;
     const hashTheta = /theta=(-?[\d.]+)/.exec(location.hash);
     if (hashTheta) theta = parseFloat(hashTheta[1]);
     if (data) {
       Object.assign(res, data.res || {});
       if (!hashTheta) theta = typeof data.theta === 'number' ? data.theta : -0.55;
-      gp = data.gp || 0;
-      burnUntil = data.burnUntil || 0;
-      soggy = data.soggy || 0;
-      trimBoost = data.trim || 0;
-      dyingH = data.dying || 0;
+      S.gp = data.gp || 0;
+      S.burnH = typeof data.burnH === 'number' ? data.burnH
+        : data.burnUntil ? Math.max(0, (data.burnUntil - Date.now()) / 3600e3) : 0;
+      S.soggy = data.soggy || 0;
+      S.trimBoost = data.trim || 0;
+      S.dyingH = data.dying || 0;
       decals = Array.isArray(data.decals) ? data.decals : [];
       B.Weather.hydrate(data.wx);
     }
+    S.south = B.Weather.st.lat !== null && B.Weather.st.lat < 0;
+    statsCache = tree.stats();
 
     try { setupScene(); } catch (e) {
       return fatal('😢 WebGL is unavailable in this browser, and the bonsai needs it to grow. (' + e.message + ')');
@@ -1659,13 +1620,21 @@
     applyRes(WALLPAPER ? 2 : savedPix);   // the wallpaper always renders fine — there's no ▦ button to fix a coarse save
 
     window.__bonsai = {
-      tree, res, simulate, setPreview, toggleFuture, applyZoom,
+      get tree() { return tree; },
+      get res() { return res; },
+      get sim() { return S; },
+      simulate: (seconds, opts) => {
+        renderStepFx(SIM.advance(S, Math.ceil(seconds / SIM.STEP_S) * SIM.STEP_S, !!(opts && opts.offline)), false);
+        statsCache = tree.stats();
+        updateAll();
+      },
+      setPreview, toggleFuture, applyZoom,
       get env() { return lastEnv; },
       get mode() { return mode; },
       get zoom() { return zoom; },
       get pix() { return { idx: resIdx, bufW: BUFW, bufH: BUFH }; },
       get foliage() { return lastTier; },
-      get dying() { return dyingH; },
+      get dying() { return S.dyingH; },
       get panY() { return panY; },
       get theta() { return theta; },
       get preview() { return previewTree ? previewYears : 0; },
@@ -1683,19 +1652,19 @@
       },
     };
     const hashFF = /ff=(\d+)/.exec(location.hash);   // #ff=N — dev: fast-forward N hours
-    if (hashFF) simulate(parseInt(hashFF[1], 10) * 3600, { offline: false, fx: false });
+    if (hashFF) SIM.advance(S, parseInt(hashFF[1], 10) * 3600, false);
     buildUI();
     bindInput();
     lastEnv = B.Weather.env(new Date());
 
     if (data && data.ts) {
-      const gapSec = clamp((Date.now() - data.ts) / 1000, 0, 72 * 3600);
+      const gapSec = Math.max(0, (Date.now() - data.ts) / 1000);
       if (gapSec > 60) {
         const before = tree.stats().segments;
-        simulate(gapSec, { offline: true, fx: false });
+        offlineAdvance(gapSec);
         const grew = tree.stats().segments - before;
         if (gapSec > 2 * 3600) {
-          toast(`🌙 while you were away (${Math.round(gapSec / 3600)}h): ` +
+          toast(`🌙 while you were away (${Math.round(Math.min(gapSec, SIM.OFFLINE_CAP_S) / 3600)}h): ` +
             (grew > 0 ? `the tree grew ${grew} new shoots` : 'the tree waited patiently'), { ms: 6000 });
         }
       }

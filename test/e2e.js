@@ -645,7 +645,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     check(true, 'no branch for right-click menu test — skipped');
   }
 
-  // --- FEED / MIST buttons
+  // --- FEED / MIST buttons (earlier taps may have pinned the meters at their
+  // caps — the sim only decays them on 15-min quantum boundaries — so give headroom)
+  await page.evaluate(() => {
+    __bonsai.res.mist = Math.min(__bonsai.res.mist, 50);
+    __bonsai.res.food = Math.min(__bonsai.res.food, 60);
+  });
   const meters0 = await page.evaluate(() => ({ food: __bonsai.res.food, mist: __bonsai.res.mist }));
   await page.click('#btn-feed');
   await page.click('#btn-mist');
