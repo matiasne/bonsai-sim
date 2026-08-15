@@ -445,13 +445,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       return built.voxels.some(v => v.kind === 'wire');
     });
     check(hasWireVox, 'wire coil voxels render on the branch');
-    await page.evaluate(() => __bonsai.simulate(50 * 3600, { offline: false, fx: false }));
-    await sleep(250);
     const setRes = await page.evaluate((id) => {
       const s = __bonsai.tree.segs.get(id);
-      return s ? s.wired : null;
+      if (!s) return null;
+      const needH = __bonsai.tree.wireSetHours(s);
+      __bonsai.tree.ageWires(needH + 2);      // fast-forward the training months
+      return { wired: s.wired, set: s.wireAge >= needH, months: needH / 720 };
     }, wireT.id);
-    check(setRes === true, 'wire STAYS on after setting — removal is up to the user');
+    check(!!setRes && setRes.wired === true && setRes.set === true,
+      `wire STAYS on after setting (~${setRes ? setRes.months.toFixed(1) : '?'}mo) — removal is up to the user`);
   }
 
   await page.keyboard.press('Escape');   // leave wire mode so canvas drags rotate/pan

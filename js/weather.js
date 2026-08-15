@@ -174,10 +174,15 @@
       else if (hot) note = '🔥 heat wave — the soil dries fast';
       else if (st.wind >= 25) note = '💨 strong wind — hold on, little tree';
 
+      // wired branches set a bit faster in the local growing season (hemisphere-aware)
+      const doy = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
+      const summerPeak = st.lat !== null && st.lat < 0 ? 355 : 172;
+      const wireRate = st.lat === null ? 1 : 1 + 0.1 * Math.cos(((doy - summerPeak) / 365) * Math.PI * 2);
+
       return {
         emoji: d.emoji, label: d.label, kind: d.kind,
         night, frost, hot, raining, snowing: d.kind === 'snow',
-        growth, dryMul, mistMul, rainWater, sway,
+        growth, dryMul, mistMul, rainWater, sway, wireRate,
         wind: st.ok ? st.wind : 5, temp: st.temp, city: st.city, ok: st.ok, note,
       };
     },

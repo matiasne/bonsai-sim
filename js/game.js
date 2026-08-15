@@ -472,7 +472,8 @@
           if (seg && !seg.wired) {
             if (tree.wire(hit.segId, true) !== null) {
               cancelSpring(hit.segId);
-              toast('➰ wire on — drag to bend · needs ~2 days to set');
+              const mo = Math.max(1, Math.round(tree.wireSetHours(seg) / 720));
+              toast(`➰ wire on — drag to bend · needs ~${mo} month${mo > 1 ? 's' : ''} to set`);
             }
           }
           drag = { type: 'bend', segId: hit.segId, lastX: e.clientX, lastY: e.clientY, moved: 0 };
@@ -656,15 +657,16 @@
     const seg = tree.segs.get(id);
     if (!seg || !seg.wired) return;
     const Vv = B.Vec;
-    const setFrac = clamp(seg.wireAge / B.TreeCFG.wireSetHours, 0, 1);
+    const need = tree.wireSetHours(seg);
+    const setFrac = clamp(seg.wireAge / need, 0, 1);
     let springAngle = 0;
     if (seg.dir0) {
       const dot = clamp(Vv.dot(Vv.norm(seg.dir), Vv.norm(seg.dir0)), -1, 1);
       springAngle = Math.acos(dot) * (1 - setFrac);
     }
     if (springAngle > 0.02) {
-      const hoursLeft = Math.max(1, Math.ceil(B.TreeCFG.wireSetHours - seg.wireAge));
-      toast(`⚠ not set yet — it needs the wire ~${hoursLeft}h more or the branch will spring back`, {
+      const daysLeft = Math.max(1, Math.ceil((need - seg.wireAge) / 24));
+      toast(`⚠ not set yet — it needs the wire ~${daysLeft} more day${daysLeft > 1 ? 's' : ''} or the branch will spring back`, {
         ms: 7000,
         action: { label: 'REMOVE', fn: () => doUnwire(id) },
       });
@@ -674,14 +676,14 @@
   }
 
   // Unwire a branch. If the wire wasn't on long enough for the branch to
-  // stabilize (< wireSetHours), it slowly springs back toward its pre-wiring
+  // stabilize (1–3 months by thickness), it slowly springs back toward its pre-wiring
   // direction — proportionally to how unset it still is.
   function doUnwire(id) {
     const seg = tree.segs.get(id);
     if (!seg || !seg.wired) return;
     const Vv = B.Vec;
     const dir0 = seg.dir0 && seg.dir0.slice();
-    const setFrac = clamp(seg.wireAge / B.TreeCFG.wireSetHours, 0, 1);
+    const setFrac = clamp(seg.wireAge / tree.wireSetHours(seg), 0, 1);
     tree.wire(id, false);
     let sprung = false;
     if (dir0) {
@@ -898,7 +900,7 @@
     const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
     gp += 7 * dtH * env.growth * hf * ff * juv * (off ? 0.5 : 1);
     tree.ageTips(dtH * env.growth * hf * 1.2);
-    const nowSet = tree.ageWires(dtH);
+    const nowSet = tree.ageWires(dtH, env.wireRate);
     if (nowSet.length && opts && opts.fx) {
       for (const r of nowSet) {
         sparkleFX(projectTreePt(r.at));
@@ -1214,7 +1216,8 @@
         requestUnwire(id);
       } else if (tree.wire(id, true) !== null) {
         cancelSpring(id);
-        toast('➰ wire on — drag the branch to bend · needs ~2 days to set' + (WALLPAPER ? ' · tap empty space to finish' : ''));
+        const mo = Math.max(1, Math.round(tree.wireSetHours(seg) / 720));
+        toast(`➰ wire on — drag the branch to bend · needs ~${mo} month${mo > 1 ? 's' : ''} to set` + (WALLPAPER ? ' · tap empty space to finish' : ''));
         if (mode !== 'wire') setMode('wire');   // ready to bend right away
         save();
       }
@@ -1313,12 +1316,12 @@
     let wireLeft = Infinity, anySet = false;
     for (const s of tree.segs.values()) {
       if (!s.wired) continue;
-      const left = B.TreeCFG.wireSetHours - s.wireAge;
+      const left = tree.wireSetHours(s) - s.wireAge;
       if (left <= 0) anySet = true;
       else wireLeft = Math.min(wireLeft, left);
     }
     if (anySet) return '➰ a wire has set — tap the coil to remove it';
-    if (wireLeft !== Infinity) return `➰ wire training — the branch sets in ~${Math.max(1, Math.ceil(wireLeft))}h`;
+    if (wireLeft !== Infinity) return `➰ wire training — the branch sets in ~${Math.max(1, Math.ceil(wireLeft / 24))}d`;
     if (res.health > 85 && statsCache && statsCache.blossoms >= 8) return '🌸 thriving!';
     return null;
   }

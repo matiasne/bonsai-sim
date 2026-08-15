@@ -53,8 +53,9 @@
     maxRunLen: 13,   // a chain must fork within this distance — no bare runaway whips
     growStep: 1.0,
     branchProb: 0.34,
-    minBendY: 1.5,   // bends may not push any joint below this
-    wireSetHours: 48, // wired branches "set" after ~2 real days, then release
+    minBendY: 1.5,        // bends may not push any joint below this
+    wireSetHoursMin: 800, // ~1 month: thin shoots set fastest…
+    wireSetHoursMax: 2000, // …~3 months for the thickest branches (season shifts the pace)
   };
 
   class TreeModel {
@@ -342,15 +343,23 @@
       return s.wired;
     }
 
-    // Wire set-time accumulates over REAL sim time. Removal is ALWAYS manual —
-    // this only reports wires that just crossed the set threshold.
-    ageWires(dtH) {
+    // How long this branch needs its wire: 1–3 months by thickness.
+    wireSetHours(s) {
+      const k = Math.min(1, Math.max(0, (s.thick - 1) / 5));
+      return CFG.wireSetHoursMin + k * (CFG.wireSetHoursMax - CFG.wireSetHoursMin);
+    }
+
+    // Wire set-time accumulates over REAL sim time (season rate ±10%).
+    // Removal is ALWAYS manual — this only reports newly-set wires.
+    ageWires(dtH, rate) {
+      const r = Math.min(1.1, Math.max(0.9, rate || 1));
       const newlySet = [];
       for (const s of this.segs.values()) {
         if (!s.wired) continue;
-        const wasSet = s.wireAge >= CFG.wireSetHours;
-        s.wireAge += dtH;
-        if (!wasSet && s.wireAge >= CFG.wireSetHours) newlySet.push({ id: s.id, at: s.end.slice() });
+        const need = this.wireSetHours(s);
+        const wasSet = s.wireAge >= need;
+        s.wireAge += dtH * r;
+        if (!wasSet && s.wireAge >= need) newlySet.push({ id: s.id, at: s.end.slice() });
       }
       return newlySet;
     }
