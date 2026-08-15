@@ -103,16 +103,20 @@ ok(t.segs.get(branch.id).dir0 === null, 'unwire clears dir0');
 ok(t.nudge(branch.id, [0, 0, 1], 0.05) === true, 'nudge rotates without wire (spring-back path)');
 t.nudge(branch.id, [0, 0, 1], -0.05);
 
-console.log('wire auto-release (branch sets)');
+console.log('wire setting (removal is always manual)');
 t.wire(branch.id, true);
 let rel = t.ageWires(47);
-ok(rel.length === 0 && t.segs.get(branch.id).wired === true, 'wire still on at 47h');
+ok(rel.length === 0 && t.segs.get(branch.id).wired === true, 'wire still on at 47h, not yet set');
 const serMid = new B.TreeModel(t.serialize());
 ok(Math.abs(serMid.segs.get(branch.id).wireAge - 47) < 0.2, 'wireAge survives save round-trip');
 rel = t.ageWires(2);
-ok(rel.length === 1 && t.segs.get(branch.id).wired === false, 'wire auto-released at ~48h (branch set)');
-ok(t.segs.get(branch.id).dir0 === null, 'auto-release clears dir0 (shape is permanent)');
-ok(!B.Voxels.buildTree(t).voxels.some(v => v.kind === 'wire'), 'coils gone after release');
+ok(rel.length === 1, 'crossing ~48h reports the branch as newly set (once)');
+ok(t.segs.get(branch.id).wired === true, 'the wire STAYS on after setting — no auto-release');
+ok(t.ageWires(5).length === 0, 'the set event fires only once');
+ok(B.Voxels.buildTree(t).voxels.some(v => v.kind === 'wire'), 'coils still render after setting');
+t.wire(branch.id, false);
+ok(t.segs.get(branch.id).wired === false && t.segs.get(branch.id).dir0 === null, 'manual removal takes the wire off');
+ok(!B.Voxels.buildTree(t).voxels.some(v => v.kind === 'wire'), 'coils gone after manual removal');
 
 console.log('serialize round-trip');
 const s1 = t.serialize();
@@ -152,7 +156,8 @@ ok(f3.stats().segments <= B.TreeCFG.maxSegments + 3 * 3 * 6, '+3y respects boost
 // user bends may legally exceed the growth height cap — future growth must not add to it
 ok(f4.stats().height <= Math.max(B.TreeCFG.maxHeight, t2.stats().height) + 1.5, '+4y adds no height beyond the cap');
 ok(f4.stats().width <= 2 * (B.TreeCFG.maxRadius + 10), '+4y still fits the viewport');
-ok([...f4.segs.values()].every(s => !s.wired), 'future visions carry no wire (long since set)');
+ok([...t2.segs.values()].some(s => s.wired) ? [...f4.segs.values()].some(s => s.wired) : true,
+  'visions keep wires on — only the user removes them');
 const f2b = B.growFuture(baseSer, 2);
 ok(JSON.stringify(f2b.serialize()) === JSON.stringify(f2.serialize()), 'future previews are deterministic');
 const futVox = B.Voxels.buildTree(f4).voxels.length;

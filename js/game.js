@@ -472,7 +472,7 @@
           if (seg && !seg.wired) {
             if (tree.wire(hit.segId, true) !== null) {
               cancelSpring(hit.segId);
-              toast('➰ wire on — drag to bend · sets & pops off in ~2 days');
+              toast('➰ wire on — drag to bend · needs ~2 days to set');
             }
           }
           drag = { type: 'bend', segId: hit.segId, lastX: e.clientX, lastY: e.clientY, moved: 0 };
@@ -898,11 +898,11 @@
     const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
     gp += 7 * dtH * env.growth * hf * ff * juv * (off ? 0.5 : 1);
     tree.ageTips(dtH * env.growth * hf * 1.2);
-    const released = tree.ageWires(dtH);
-    if (released.length && opts && opts.fx) {
-      for (const r of released) {
+    const nowSet = tree.ageWires(dtH);
+    if (nowSet.length && opts && opts.fx) {
+      for (const r of nowSet) {
         sparkleFX(projectTreePt(r.at));
-        toast('🎉 the branch has set — wire off, shape kept!');
+        toast('✅ the branch has set — remove the wire whenever you like');
       }
     }
     if (gp >= 1) {
@@ -1214,7 +1214,7 @@
         requestUnwire(id);
       } else if (tree.wire(id, true) !== null) {
         cancelSpring(id);
-        toast('➰ wire on — drag the branch to bend · sets in ~2 days' + (WALLPAPER ? ' · tap empty space to finish' : ''));
+        toast('➰ wire on — drag the branch to bend · needs ~2 days to set' + (WALLPAPER ? ' · tap empty space to finish' : ''));
         if (mode !== 'wire') setMode('wire');   // ready to bend right away
         save();
       }
@@ -1310,10 +1310,14 @@
     if (res.mist < 15) return '🌫 dry air — a misting would be lovely';
     if (res.food < 10) return '🧪 hungry — a little fertilizer?';
     if (statsCache && statsCache.tips >= 20) return '✂️ getting bushy — pruning helps it bloom';
-    let wireLeft = Infinity;
+    let wireLeft = Infinity, anySet = false;
     for (const s of tree.segs.values()) {
-      if (s.wired) wireLeft = Math.min(wireLeft, B.TreeCFG.wireSetHours - s.wireAge);
+      if (!s.wired) continue;
+      const left = B.TreeCFG.wireSetHours - s.wireAge;
+      if (left <= 0) anySet = true;
+      else wireLeft = Math.min(wireLeft, left);
     }
+    if (anySet) return '➰ a wire has set — tap the coil to remove it';
     if (wireLeft !== Infinity) return `➰ wire training — the branch sets in ~${Math.max(1, Math.ceil(wireLeft))}h`;
     if (res.health > 85 && statsCache && statsCache.blossoms >= 8) return '🌸 thriving!';
     return null;

@@ -396,7 +396,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     return c;
   });
   check(/grab/.test(viewCursorBack), 'view mode returns to the grab cursor');
-  const wireT = await page.evaluate(() => {
+  await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });
+  const findWireTarget = () => page.evaluate(() => {
     const t = __bonsai.tree;
     const r = document.querySelector('#view').getBoundingClientRect();
     const cands = [];
@@ -415,21 +416,27 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     }
     return null;
   });
-  check(!!wireT, 'found a branch to wire');
-  if (wireT) {
-    const cx = wireT.x;
-    const cy = wireT.y;
-    await page.mouse.move(cx, cy);
+  let wireT = null, wireRes = null;
+  for (let attempt = 0; attempt < 2 && !wireRes; attempt++) {
+    const m = await page.evaluate(() => __bonsai.mode);
+    if (m !== 'wire') { await page.click('#btn-wire'); await sleep(300); }
+    wireT = await findWireTarget();
+    if (!wireT) break;
+    await page.mouse.move(wireT.x, wireT.y);
     await page.mouse.down();
-    await page.mouse.move(cx, cy - 30, { steps: 8 });
+    await page.mouse.move(wireT.x, wireT.y - 30, { steps: 8 });
     await page.mouse.up();
     await sleep(250);
-    const wireRes = await page.evaluate((id) => {
+    const res = await page.evaluate((id) => {
       const s = __bonsai.tree.segs.get(id);
       return s ? { wired: s.wired, dir: s.dir.slice() } : null;
     }, wireT.id);
-    check(wireRes && wireRes.wired === true, 'drag attached wire to the branch');
-    const moved = wireRes && (Math.abs(wireRes.dir[0] - wireT.dir[0]) + Math.abs(wireRes.dir[1] - wireT.dir[1]) + Math.abs(wireRes.dir[2] - wireT.dir[2])) > 0.01;
+    if (res && res.wired) wireRes = res;
+  }
+  check(!!wireT, 'found a branch to wire');
+  check(!!wireRes, 'drag attached wire to the branch');
+  if (wireRes && wireT) {
+    const moved = (Math.abs(wireRes.dir[0] - wireT.dir[0]) + Math.abs(wireRes.dir[1] - wireT.dir[1]) + Math.abs(wireRes.dir[2] - wireT.dir[2])) > 0.01;
     check(moved, 'drag bent the branch');
     const modeAfterBend = await page.evaluate(() => __bonsai.mode);
     check(modeAfterBend === 'view', 'finishing the bend returns to normal mode automatically');
@@ -444,7 +451,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       const s = __bonsai.tree.segs.get(id);
       return s ? s.wired : null;
     }, wireT.id);
-    check(setRes === false, 'wire auto-released after ~2 days (branch set, shape kept)');
+    check(setRes === true, 'wire STAYS on after setting — removal is up to the user');
   }
 
   await page.keyboard.press('Escape');   // leave wire mode so canvas drags rotate/pan
@@ -574,12 +581,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const v = document.querySelector('#view');
     const r = v.getBoundingClientRect();
     for (const s of t.segs.values()) {
-      if (s.pid === null || s.cut || s.order < 1 || s.thick > 5) continue;
+      if (s.pid === null || s.cut || s.order < 1 || s.thick > 5 || s.wired) continue;
       const mid = [(s.start[0] + s.end[0]) / 2, (s.start[1] + s.end[1]) / 2, (s.start[2] + s.end[2]) / 2];
       const p = __bonsai.project(mid);
       const cx = r.left + (p.x / v.width) * r.width, cy = r.top + (p.y / v.height) * r.height;
       const hit = __bonsai.pick(cx, cy);
-      if (hit && (hit.kind === 'wood' || hit.kind === 'wire') && hit.segId === s.id) return { x: cx, y: cy, id: s.id };
+      if (hit && hit.kind === 'wood' && hit.segId === s.id) return { x: cx, y: cy, id: s.id };
     }
     return null;
   });

@@ -342,21 +342,17 @@
       return s.wired;
     }
 
-    // Wire sets over REAL sim time; a released wire keeps the bent shape.
+    // Wire set-time accumulates over REAL sim time. Removal is ALWAYS manual —
+    // this only reports wires that just crossed the set threshold.
     ageWires(dtH) {
-      const released = [];
+      const newlySet = [];
       for (const s of this.segs.values()) {
         if (!s.wired) continue;
+        const wasSet = s.wireAge >= CFG.wireSetHours;
         s.wireAge += dtH;
-        if (s.wireAge >= CFG.wireSetHours) {
-          s.wired = false;
-          s.wireAge = 0;
-          s.dir0 = null;                        // fully set: the shape is permanent
-          released.push({ id: s.id, at: s.end.slice() });
-        }
+        if (!wasSet && s.wireAge >= CFG.wireSetHours) newlySet.push({ id: s.id, at: s.end.slice() });
       }
-      if (released.length) this.rev++;
-      return released;
+      return newlySet;
     }
 
     bend(id, axis, ang) {
@@ -450,8 +446,6 @@
       clone.grow(40);
       if (clone.rev === lastRev) stale++; else { stale = 0; lastRev = clone.rev; }
     }
-    for (const s of clone.segs.values()) { s.wired = false; s.wireAge = 0; }  // long since set
-    clone.rev++;
     clone.ageHours = (serialized.ageHours || 0) + years * 8760;
     clone.recompute();
     return clone;
