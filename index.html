@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Bonsai 🌸</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌸</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>🌸 PIXEL BONSAI</h1>
+    <div class="chips">
+      <span id="chip-clock" class="chip">--:--</span>
+      <button id="chip-weather" class="chip" title="weather &amp; location — click to change">⏳ loading…</button>
+    </div>
+  </header>
+
+  <section id="scene">
+    <div id="stage-frame">
+      <div id="canvas-stack">
+        <canvas id="view" width="176" height="176" data-mode="view"></canvas>
+        <canvas id="fx" width="176" height="176"></canvas>
+        <div id="zoom-ctl">
+          <button id="zoom-in" title="zoom in (scroll / pinch)">+</button>
+          <button id="zoom-out" title="zoom out (scroll / pinch)">−</button>
+        </div>
+        <div id="future-bar" class="hidden">
+          <button data-years="0">NOW</button>
+          <button data-years="2">+2Y</button>
+          <button data-years="3">+3Y</button>
+          <button data-years="4">+4Y</button>
+          <button data-years="7">+7Y</button>
+          <button data-years="8">+8Y</button>
+          <button data-years="9">+9Y</button>
+        </div>
+        <div id="branch-menu" class="hidden">
+          <button id="bm-cut">✂️ CUT</button>
+          <button id="bm-wire">➰ WIRE</button>
+        </div>
+        <div id="fatal" class="hidden"></div>
+      </div>
+      <div id="status-line">drag the pot to rotate 🌀</div>
+    </div>
+    <aside id="panel">
+      <div class="stat"><label>WATER</label><div class="bar" id="bar-water"></div></div>
+      <div class="stat"><label>MIST</label><div class="bar" id="bar-mist"></div></div>
+      <div class="stat"><label>FOOD</label><div class="bar" id="bar-food"></div></div>
+      <div class="stat"><label>HEALTH</label><div class="bar" id="bar-health"></div></div>
+      <div id="tree-facts">
+        <span id="fact-stage">Sapling</span>
+        <span id="fact-age">age 0d</span>
+        <span id="fact-bloom">🌸 0</span>
+      </div>
+    </aside>
+  </section>
+
+  <nav id="actions">
+    <button class="btn" id="btn-water">💧 WATER</button>
+    <button class="btn" id="btn-mist">🌫 MIST</button>
+    <button class="btn" id="btn-feed">🧪 FEED</button>
+    <button class="btn mode" id="btn-prune">✂️ PRUNE</button>
+    <button class="btn mode" id="btn-wire">➰ WIRE</button>
+    <button class="btn mode small" id="btn-future" title="peek 2–4 years ahead">🔮</button>
+    <button class="btn small" id="btn-ff" title="time-lapse: one hour passes">⏩</button>
+    <button class="btn small" id="btn-help" title="care guide">?</button>
+    <button class="btn small" id="btn-settings" title="location &amp; settings">⚙</button>
+  </nav>
+
+  <div id="toasts"></div>
+
+  <div class="modal hidden" id="modal-help">
+    <div class="modal-box">
+      <div class="modal-head"><b>CARE GUIDE</b><button class="btn small modal-close">✕</button></div>
+      <ul class="guide">
+        <li><b>💧 WATER</b> — keeps the soil moist. Trees drink more on hot, dry days. Shortcut: tap the open air above or beside the tree.</li>
+        <li><b>🌫 MIST</b> — leaves love humidity. Mist when the air is dry. Shortcut: tap the blossoms.</li>
+        <li><b>🧪 FEED</b> — fertilizer speeds up growth. Overdo it and the roots burn. Shortcut: tap the pebbles in the pot.</li>
+        <li><b>🪵 BRANCH MENU</b> — just tap any branch: a little ✂️/➰ menu appears right there.</li>
+        <li><b>✂️ PRUNE</b> — click a branch (or its blossom) to cut it. Pruned spots bud back denser.</li>
+        <li><b>➰ WIRE</b> — click a branch to wire it, then drag to bend. Rotate the pot and bend again to shape in 3D. The wire pops off on its own once the branch sets (~2 days) — or double-click to remove it early. The shape is kept either way.</li>
+        <li><b>🔮 FUTURE</b> — preview your bonsai after 2 to 9 years of good care. Just a vision — nothing changes.</li>
+        <li><b>⏩</b> — time-lapse: skip one hour of growth.</li>
+        <li><b>🌀 ROTATE</b> — grab and drag the pot itself (or use ←/→) to see every side. Dragging the background does nothing.</li>
+        <li><b>🔍 ZOOM</b> — scroll, pinch, +/− buttons, or the <code>+</code>/<code>-</code> keys. While zoomed in, drag up/down (or ↑/↓) to move the view; zooming out re-centers.</li>
+      </ul>
+      <p class="fine">Your real sky drives the simulation: rain waters the tree, frost makes it dormant,
+      wind makes it sway, night slows growth. The bonsai keeps living while the page is closed —
+      come back and see what changed.</p>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="modal-settings">
+    <div class="modal-box">
+      <div class="modal-head"><b>WEATHER &amp; SETTINGS</b><button class="btn small modal-close">✕</button></div>
+      <p class="fine" id="loc-current">location: not set</p>
+      <div class="row">
+        <input id="city-input" type="text" placeholder="type a city…" autocomplete="off">
+        <button class="btn" id="btn-city-search">SEARCH</button>
+      </div>
+      <div id="city-results"></div>
+      <div class="row">
+        <button class="btn" id="btn-geo">📍 USE MY LOCATION</button>
+      </div>
+      <hr>
+      <div class="row">
+        <button class="btn danger" id="btn-reset">🌱 NEW TREE</button>
+      </div>
+      <p class="fine">weather data by open-meteo.com · everything is saved in your browser</p>
+    </div>
+  </div>
+
+  <footer>real weather · real time · your bonsai keeps living while you're away</footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js" onerror="window.__cdn1Failed=1"></script>
+<script>
+if (window.__cdn1Failed) {
+  document.write('<script src="https://unpkg.com/three@0.147.0/build/three.min.js"><\/script>');
+}
+</script>
+<script src="js/tree.js"></script>
+<script src="js/voxels.js"></script>
+<script src="js/weather.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

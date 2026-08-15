@@ -1,0 +1,1134 @@
+/* Pixel Bonsai — game integrator: Three.js scene, sim tick, input, FX, UI, persistence. */
+(function () {
+  'use strict';
+  const B = window.Bonsai;
+  const GEO = B.Voxels.GEO;
+  const PAL = B.Voxels.PAL;
+
+  // ---------- constants
+  const BUF = 176;                  // backbuffer pixels (CSS scales it up, pixelated)
+  const HALF = 44;                  // ortho half-width in world units → 2 buffer px per voxel
+  const LOOK_Y = 31;
+  const ELEV = 0.165;               // camera elevation (rad)
+  const PX_PER_UNIT = BUF / (2 * HALF);
+  const KEY = 'pixel-bonsai-v1';
+  const SLOP = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+
+  // ---------- tiny helpers
+  const $ = (s) => document.querySelector(s);
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const pick = (arr) => arr[(Math.random() * arr.length) | 0];
+
+  // ---------- DOM refs
+  const view = $('#view'), fxCanvas = $('#fx'), fatalEl = $('#fatal');
+  const statusEl = $('#status-line'), toastsEl = $('#toasts');
+  const chipClock = $('#chip-clock'), chipWeather = $('#chip-weather');
+
+  function fatal(msg) {
+    fatalEl.textContent = msg;
+    fatalEl.classList.remove('hidden');
+  }
+
+  function toast(msg, opts) {
+    opts = opts || {};
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    if (opts.action) {
+      const b = document.createElement('button');
+      b.textContent = opts.action.label;
+      b.onclick = () => { el.remove(); opts.action.fn(); };
+      el.appendChild(b);
+    }
+    toastsEl.appendChild(el);
+    while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
+    setTimeout(() => el.remove(), opts.ms || 3400);
+  }
+
+  const store = {
+    mem: {}, warned: false,
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return this.mem[k] || null; } },
+    set(k, v) {
+      try { localStorage.setItem(k, v); } catch (e) {
+        this.mem[k] = v;
+        if (!this.warned) { this.warned = true; toast("⚠ storage unavailable — progress won't persist"); }
+      }
+    },
+    del(k) { try { localStorage.removeItem(k); } catch (e) { delete this.mem[k]; } },
+  };
+
+  // ---------- state
+  let tree = null;
+  const res = { water: 72, mist: 60, food: 55, health: 82 };
+  let theta = -0.55, thetaVel = 0;
+  let zoom = 1, panY = 0;
+  let mode = 'view';
+  let previewTree = null, previewYears = 0, futureBarOpen = false;
+  const previewCache = new Map();
+  let gp = 0, burnUntil = 0, soggy = 0;
+  let decals = [], decalsDirty = true;
+  let lastEnv = null, statsCache = null;
+  let lastTick = Date.now(), lastSaveAt = Date.now();
+  let drag = null;
+  const fxRng = B.makeRng((Math.random() * 0xffffffff) >>> 0);
+
+  // ---------- Three.js scene
+  let scene, camera, renderer, rotGroup, potMesh, treeMesh, decalMesh, starPts, starMat;
+  let m4, q4, v3, sc3, col;
+  const treeSegByInst = [], treeKindByInst = [];
+  let potVox = null, canopy = null;
+  let treeKey = '', potKey = '';
+
+  function makeInstMesh(cap) {
+    const g = new THREE.BoxGeometry(1, 1, 1);
+    const m = new THREE.MeshBasicMaterial();
+    const mesh = new THREE.InstancedMesh(g, m, cap);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.count = 0;
+    return mesh;
+  }
+
+  function setupScene() {
+    m4 = new THREE.Matrix4(); q4 = new THREE.Quaternion(); v3 = new THREE.Vector3();
+    sc3 = new THREE.Vector3(); col = new THREE.Color();
+
+    renderer = new THREE.WebGLRenderer({ canvas: view, antialias: false });
+    renderer.setSize(BUF, BUF, false);
+    renderer.setClearColor(0xf4f1ea);
+
+    scene = new THREE.Scene();
+    camera = new THREE.OrthographicCamera(-HALF, HALF, HALF, -HALF, 1, 400);
+    camera.position.set(0, LOOK_Y + Math.sin(ELEV) * 120, Math.cos(ELEV) * 120);
+    camera.lookAt(0, LOOK_Y, 0);
+    camera.updateMatrixWorld();
+
+    rotGroup = new THREE.Group();
+    scene.add(rotGroup);
+
+    potMesh = makeInstMesh(4096);
+    treeMesh = makeInstMesh(32768);
+    decalMesh = makeInstMesh(64);
+    rotGroup.add(potMesh, treeMesh, decalMesh);
+
+    const shadow = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 24),
+      new THREE.MeshBasicMaterial({ color: 0x1a2430, transparent: true, opacity: 0.10 })
+    );
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.scale.set(GEO.potRx + 5, GEO.potRz + 4, 1);
+    shadow.position.y = 0.04;
+    scene.add(shadow);
+
+    // faint night stars on a far plane (outside rotGroup — the sky doesn't spin)
+    const starPos = [];
+    for (let i = 0; i < 42; i++) {
+      starPos.push(
+        (B.Voxels.hash3(i, 7, 1) - 0.5) * 2 * (HALF - 4),
+        14 + B.Voxels.hash3(i, 13, 5) * 54,
+        -80
+      );
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+    starMat = new THREE.PointsMaterial({ color: 0x9fb0d0, size: 2, sizeAttenuation: false, transparent: true, opacity: 0 });
+    starPts = new THREE.Points(sg, starMat);
+    scene.add(starPts);
+
+    potVox = B.Voxels.buildPot();
+  }
+
+  // ---------- voxel → instance sync
+  function colorFor(o, tier, frost, wet) {
+    if (o.kind === 'wood') return PAL.trunk[o.ci];
+    if (o.kind === 'wire') return PAL.wire[o.ci];
+    if (o.kind === 'leaf') {
+      if (frost && o.ci === 0) return PAL.leafFrostTop;
+      return (tier === 'dull' ? PAL.leafDull : PAL.leaf)[o.ci];
+    }
+    if (o.kind === 'pebble') return (wet ? PAL.pebbleWet : PAL.pebble)[o.ci];
+    return PAL.pot[o.ci];
+  }
+
+  function writeInstances(mesh, list, colorOf) {
+    const cap = mesh.instanceMatrix.count;
+    const n = Math.min(list.length, cap);
+    q4.identity();
+    for (let i = 0; i < n; i++) {
+      const o = list[i];
+      m4.compose(v3.set(o.x, o.y, o.z), q4, sc3.set(o.s, o.sy === undefined ? o.s : o.sy, o.s));
+      mesh.setMatrixAt(i, m4);
+      mesh.setColorAt(i, col.set(colorOf(o)));
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }
+
+  function leafSum(t) {
+    let s = 0;
+    for (const seg of t.segs.values()) if (!seg.children.length && !seg.cut) s += t.leafRadius(seg);
+    return s;
+  }
+
+  function syncTree(force) {
+    const rt = previewTree || tree;                              // 🔮 vision renders instead
+    const tier = previewTree ? 'pink' : res.health < 25 ? 'bare' : res.health < 55 ? 'dull' : 'pink';
+    const frost = !previewTree && !!(lastEnv && (lastEnv.frost || lastEnv.snowing));
+    const puffScale = mode === 'wire' ? 0.6 : 1;
+    const key = [rt.rev, previewYears, Math.round(leafSum(rt) * 2), puffScale, tier, frost ? 1 : 0].join('|');
+    if (!force && key === treeKey) return;
+    treeKey = key;
+    const built = B.Voxels.buildTree(rt, { puffScale });
+    canopy = built.canopy;
+    let list = built.voxels;
+    if (tier === 'bare') list = list.filter(o => o.kind !== 'leaf');
+    writeInstances(treeMesh, list, o => colorFor(o, tier, frost, false));
+    treeSegByInst.length = 0; treeKindByInst.length = 0;
+    for (let i = 0; i < list.length; i++) { treeSegByInst[i] = list[i].seg; treeKindByInst[i] = list[i].kind; }
+  }
+
+  function syncPot(force) {
+    const wet = res.water > 65;
+    const key = wet ? 'wet' : 'dry';
+    if (!force && key === potKey) return;
+    potKey = key;
+    writeInstances(potMesh, potVox, o => colorFor(o, 'pink', false, wet));
+  }
+
+  function syncDecals() {
+    if (!decalsDirty) return;
+    decalsDirty = false;
+    const list = B.Voxels.buildDecals(decals, Date.now());
+    writeInstances(decalMesh, list, o => o.color);
+  }
+
+  // ---------- projection + picking
+  function projectTreePt(p) { // tree-space point (soil at y=0) → backbuffer px
+    scene.updateMatrixWorld();
+    v3.set(p[0], p[1] + GEO.soilY, p[2]);
+    rotGroup.localToWorld(v3);
+    v3.project(camera);
+    return { x: (v3.x * 0.5 + 0.5) * BUF, y: (-v3.y * 0.5 + 0.5) * BUF };
+  }
+  function projectLocalPt(x, y, z) { // rotGroup-space point → backbuffer px
+    scene.updateMatrixWorld();
+    v3.set(x, y, z);
+    rotGroup.localToWorld(v3);
+    v3.project(camera);
+    return { x: (v3.x * 0.5 + 0.5) * BUF, y: (-v3.y * 0.5 + 0.5) * BUF };
+  }
+
+  let ray = null;
+
+  function applyZoom(z) {
+    zoom = clamp(z, 0.6, 3.2);
+    camera.zoom = zoom;
+    camera.updateProjectionMatrix();
+    applyPan(panY);              // zooming out re-centers via the pan clamp
+  }
+
+  function applyPan(p) {
+    const maxPan = Math.max(0, HALF * (1 - 1 / zoom));   // never pan past the un-zoomed frame
+    panY = clamp(p, -maxPan, maxPan);
+    camera.position.set(0, LOOK_Y + panY + Math.sin(ELEV) * 120, Math.cos(ELEV) * 120);
+    camera.lookAt(0, LOOK_Y + panY, 0);
+    camera.updateMatrixWorld();
+  }
+
+  // Raycast the whole scene (tree + pot). Returns the front-most acceptable hit as
+  // {target: 'pot'|'pebble'|'leaf'|'wood'|'wire', segId?}. No preview guard here —
+  // the pot must stay grabbable for rotation inside 🔮 visions.
+  function pickScene(clientX, clientY, opts) {
+    opts = opts || {};
+    scene.updateMatrixWorld();
+    if (!ray) ray = new THREE.Raycaster();
+    const rect = view.getBoundingClientRect();
+    const bx = (clientX - rect.left) / rect.width;
+    const by = (clientY - rect.top) / rect.height;
+    for (const [ox, oy] of SLOP) {
+      const nx = (bx + ox / BUF) * 2 - 1;
+      const ny = -((by + oy / BUF) * 2 - 1);
+      ray.setFromCamera({ x: nx, y: ny }, camera);
+      const hits = ray.intersectObjects([treeMesh, potMesh]);
+      for (const h of hits) {
+        if (h.instanceId === undefined) continue;
+        if (h.object === potMesh) {
+          if (opts.treeOnly) continue;
+          const v = potVox[h.instanceId];
+          return { target: v ? v.kind : 'pot' };
+        }
+        const kind = treeKindByInst[h.instanceId];
+        if (opts.skipLeaf && kind === 'leaf') continue;
+        const segId = treeSegByInst[h.instanceId];
+        if (segId !== undefined && segId >= 0) return { target: kind, segId };
+      }
+    }
+    return null;
+  }
+
+  // Branch picking for the ✂️/➰ tools (tree only, blocked during visions).
+  function pickAt(clientX, clientY) {
+    if (previewTree) return null;
+    const s = pickScene(clientX, clientY, { treeOnly: true, skipLeaf: mode === 'wire' });
+    if (!s || s.segId === undefined) return null;
+    return { segId: s.segId, kind: s.target };
+  }
+
+  function bendAxisLocal() {
+    camera.getWorldDirection(v3);
+    rotGroup.getWorldQuaternion(q4);
+    v3.applyQuaternion(q4.invert());
+    return [v3.x, v3.y, v3.z];
+  }
+  function pitchAxisLocal() { // camera's screen-x axis, in pot-local space
+    v3.setFromMatrixColumn(camera.matrixWorld, 0);
+    rotGroup.getWorldQuaternion(q4);
+    v3.applyQuaternion(q4.invert());
+    return [v3.x, v3.y, v3.z];
+  }
+
+  // ---------- input
+  const touches = new Map();
+  function touchDist() {
+    const p = [...touches.values()];
+    return p.length < 2 ? 0 : Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+  }
+
+  function bindInput() {
+    view.addEventListener('contextmenu', e => e.preventDefault());
+
+    view.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      applyZoom(zoom * Math.exp(-e.deltaY * 0.0016));
+    }, { passive: false });
+
+    view.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      view.setPointerCapture(e.pointerId);
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size === 2) { drag = { type: 'pinch', d: touchDist() }; return; }
+      if (branchMenuSeg !== null) { closeBranchMenu(); return; }   // first click just dismisses
+      const start = { x: e.clientX, y: e.clientY };
+      if (mode === 'prune') {
+        const hit = pickAt(e.clientX, e.clientY);
+        if (hit) { drag = { type: 'maybePrune', hit, start }; return; }
+      } else if (mode === 'wire') {
+        const hit = pickAt(e.clientX, e.clientY);
+        if (hit) {
+          const seg = tree.segs.get(hit.segId);
+          if (seg && !seg.wired) {
+            if (tree.wire(hit.segId, true) !== null) toast('➰ wire on — drag to bend · sets & pops off in ~2 days');
+          }
+          drag = { type: 'bend', segId: hit.segId, lastX: e.clientX, lastY: e.clientY, moved: 0 };
+          return;
+        }
+      }
+      // the scene is the interface: pot = rotate handle, pebbles = feed,
+      // blossoms = mist, open air (outside the branches / above) = water
+      const s = pickScene(e.clientX, e.clientY);
+      if (s && (s.target === 'pot' || s.target === 'pebble')) {
+        drag = { type: 'rotate', lastX: e.clientX, lastY: e.clientY, moved: 0, tap: s.target };
+      } else if (mode === 'view') {
+        if (s && s.target === 'leaf') drag = { type: 'maybeTap', action: 'mist', start };
+        else if (!s) drag = { type: 'maybeTap', action: 'water', start };   // pour from above
+        else if (s && (s.target === 'wood' || s.target === 'wire') && !previewTree) {
+          drag = { type: 'maybeBranch', segId: s.segId, start };            // tap → ✂️/➰ menu
+        }
+      }
+    });
+
+    // hover: in view mode the cursor becomes the action a tap would perform
+    let hoverAt = 0;
+    view.addEventListener('pointermove', (e) => {
+      if (drag || e.pointerType === 'touch') return;
+      const now = performance.now();
+      if (now - hoverAt < 70) return;
+      hoverAt = now;
+      let h = '';
+      if (mode === 'view' && !previewTree) {
+        const s = pickScene(e.clientX, e.clientY);
+        h = s ? s.target : 'sky';
+      }
+      if (view.dataset.hover !== h) view.dataset.hover = h;
+    });
+    view.addEventListener('pointerleave', () => { view.dataset.hover = ''; });
+
+    view.addEventListener('pointermove', (e) => {
+      if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!drag) return;
+      if (drag.type === 'pinch') {
+        if (touches.size >= 2) {
+          const d = touchDist();
+          if (drag.d > 12) applyZoom(zoom * (d / drag.d));
+          drag.d = d;
+        }
+        return;
+      }
+      if (drag.type === 'maybePrune' || drag.type === 'maybeTap' || drag.type === 'maybeBranch') {
+        if (Math.hypot(e.clientX - drag.start.x, e.clientY - drag.start.y) > 6) drag = null;
+        return;
+      }
+      if (drag.type === 'rotate') {
+        const dx = e.clientX - drag.lastX;
+        const dy = e.clientY - drag.lastY;
+        drag.lastX = e.clientX;
+        drag.lastY = e.clientY;
+        drag.moved = (drag.moved || 0) + Math.abs(dx) + Math.abs(dy);
+        theta += dx * 0.011;
+        thetaVel = dx * 0.011;
+        if (dy && zoom > 1.01) {                // vertical drag pans when zoomed in
+          const rect = view.getBoundingClientRect();
+          applyPan(panY + dy * (2 * HALF / zoom) / rect.height);
+        }
+        return;
+      }
+      if (drag.type === 'bend') {
+        const rect = view.getBoundingClientRect();
+        const k = BUF / rect.width;
+        const dx = (e.clientX - drag.lastX) * k;
+        const dy = (e.clientY - drag.lastY) * k;
+        drag.lastX = e.clientX; drag.lastY = e.clientY;
+        drag.moved += Math.abs(dx) + Math.abs(dy);
+        const seg = tree.segs.get(drag.segId);
+        if (!seg || !seg.wired) return;
+        const base = projectTreePt(seg.start);
+        const tip = projectTreePt(seg.end);
+        const gx = tip.x - base.x, gy = tip.y - base.y;
+        const g2 = gx * gx + gy * gy;
+        let axis, ang;
+        if (g2 < 120) {   // branch foreshortened (points at the camera): pitch it instead
+          axis = pitchAxisLocal();
+          ang = clamp(dy * 0.012, -0.12, 0.12);
+        } else {
+          axis = bendAxisLocal();
+          ang = clamp((gx * dy - gy * dx) / Math.max(400, g2), -0.12, 0.12);
+        }
+        if (ang) tree.bend(drag.segId, axis, ang);
+      }
+    });
+
+    const endDrag = (e) => {
+      touches.delete(e.pointerId);
+      if (!drag) return;
+      if (drag.type === 'pinch') { if (touches.size < 2) drag = null; return; }
+      if (drag.type === 'maybePrune' && drag.hit) doCut(drag.hit.segId);
+      else if (drag.type === 'maybeTap') (drag.action === 'mist' ? doMist : doWater)();
+      else if (drag.type === 'maybeBranch') openBranchMenu(drag.segId, e.clientX, e.clientY);
+      else if (drag.type === 'rotate' && (drag.moved || 0) < 6 && drag.tap === 'pebble' && mode === 'view') doFeed();
+      else if (drag.type === 'bend' && drag.moved < 3) toast('➰ drag the branch to bend it');
+      else if (drag.type === 'bend') save();
+      drag = null;
+    };
+    view.addEventListener('pointerup', endDrag);
+    view.addEventListener('pointercancel', (e) => { touches.delete(e.pointerId); drag = null; });
+
+    view.addEventListener('dblclick', (e) => {
+      if (mode !== 'wire') return;
+      const hit = pickAt(e.clientX, e.clientY);
+      if (hit) {
+        const seg = tree.segs.get(hit.segId);
+        if (seg && seg.wired) {
+          tree.wire(hit.segId, false);
+          toast('➰ wire removed');
+          save();
+        }
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      if (e.key === 'ArrowLeft') { thetaVel = 0; theta -= 0.09; }
+      else if (e.key === 'ArrowRight') { thetaVel = 0; theta += 0.09; }
+      else if (e.key === 'ArrowUp') applyPan(panY + 3);
+      else if (e.key === 'ArrowDown') applyPan(panY - 3);
+      else if (e.key === '+' || e.key === '=') applyZoom(zoom * 1.15);
+      else if (e.key === '-' || e.key === '_') applyZoom(zoom / 1.15);
+      else if (e.key === 'Escape') {
+        if (branchMenuSeg !== null) closeBranchMenu();
+        else if (futureBarOpen) toggleFuture();
+        else setMode('view');
+      }
+    });
+
+    window.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+    window.addEventListener('pagehide', save);
+  }
+
+  // ---------- branch context menu (tap a branch → ✂️/➰ right there)
+  let branchMenuSeg = null;
+  const branchMenuEl = $('#branch-menu');
+
+  function openBranchMenu(segId, clientX, clientY) {
+    const seg = tree.segs.get(segId);
+    if (!seg || previewTree) return;
+    branchMenuSeg = segId;
+    $('#bm-wire').textContent = seg.wired ? '➰ UNWIRE' : '➰ WIRE';
+    const stack = $('#canvas-stack').getBoundingClientRect();
+    branchMenuEl.classList.remove('hidden');
+    const mw = branchMenuEl.offsetWidth || 130, mh = branchMenuEl.offsetHeight || 34;
+    branchMenuEl.style.left = clamp(clientX - stack.left - mw / 2, 4, stack.width - mw - 4) + 'px';
+    branchMenuEl.style.top = clamp(clientY - stack.top - mh - 12, 4, stack.height - mh - 4) + 'px';
+  }
+  function closeBranchMenu() {
+    branchMenuSeg = null;
+    branchMenuEl.classList.add('hidden');
+  }
+
+  // ---------- care actions
+  function doCut(segId) {
+    const r = tree.cut(segId);
+    if (!r.ok) {
+      if (r.reason === 'trunk') toast("🚫 that's the trunk base — too thick to cut");
+      else if (r.reason === 'thick') toast('🚫 too thick for scissors — prune the thinner branches');
+      return;
+    }
+    debrisFX(projectTreePt(r.at));
+    toast(`✂️ snip! it will bud back denser (−${r.removed})`, {
+      ms: 9000,
+      action: { label: 'UNDO', fn: () => { if (tree.restore(r.undo)) { toast('🌱 phew — branch restored'); save(); } } },
+    });
+    save();
+  }
+
+  // ---------- future preview (🔮)
+  function setPreview(years) {
+    if (!years) {
+      previewTree = null; previewYears = 0;
+    } else {
+      const key = tree.rev + '|' + years;
+      if (!previewCache.has(key)) {
+        previewCache.set(key, B.growFuture(tree.serialize(), years));
+        if (previewCache.size > 14) previewCache.delete(previewCache.keys().next().value);
+      }
+      previewTree = previewCache.get(key);
+      previewYears = years;
+    }
+    for (const b of document.querySelectorAll('#future-bar button')) {
+      b.classList.toggle('active', +b.dataset.years === previewYears);
+    }
+    $('#btn-future').classList.toggle('active', !!previewTree);
+    view.dataset.hover = '';
+    closeBranchMenu();
+    treeKey = '';                 // force a resync next frame
+    updateAll();
+  }
+
+  function toggleFuture() {
+    futureBarOpen = !futureBarOpen;
+    $('#future-bar').classList.toggle('hidden', !futureBarOpen);
+    if (futureBarOpen) {
+      setMode('view');
+      setPreview(2);
+      toast('🔮 gazing ahead — assuming years of loving care…', { ms: 4200 });
+    } else {
+      setPreview(0);
+    }
+  }
+
+  function guardPreview() {
+    if (!previewTree) return false;
+    toast('🔮 just a vision — press NOW to tend the real tree');
+    return true;
+  }
+
+  function doWater() {
+    if (guardPreview()) return;
+    if (res.water > 90) {
+      soggy = Math.min(100, soggy + 25);
+      toast('🫧 soggy! the soil is already drenched…');
+    } else {
+      toast(pick(['💧 a good soak', '💧 glug glug…', '💧 the roots drink deep']));
+    }
+    res.water = clamp(res.water + 35, 0, 100);
+    waterFX(); updateAll(); save();
+  }
+
+  function doMist() {
+    if (guardPreview()) return;
+    res.mist = clamp(res.mist + 45, 0, 100);
+    toast(pick(['🌫 psssst — the leaves glisten', '🌫 a fine morning mist', '🌫 mountain air vibes']));
+    mistFX(); updateAll(); save();
+  }
+
+  function doFeed() {
+    if (guardPreview()) return;
+    res.food = clamp(res.food + 45, 0, 130);
+    if (res.food > 100) {
+      burnUntil = Date.now() + 12 * 3600e3;
+      toast('🔥 fertilizer burn! go easy for a while…');
+    } else {
+      toast(pick(['🧪 nom nom — growth boost!', '🧪 pellets sprinkled on the soil']));
+    }
+    for (let i = 0; i < 6; i++) {
+      const p = B.Voxels.pebbleSpot(() => fxRng.next());
+      decals.push({ u: p.u, v: p.v, type: 'pellet', ts: Date.now() });
+    }
+    decals = decals.slice(-48);
+    decalsDirty = true;
+    feedFX(); updateAll(); save();
+  }
+
+  function setMode(m) {
+    if (previewTree && m !== 'view') { guardPreview(); return; }
+    mode = (mode === m) ? 'view' : m;
+    view.dataset.mode = mode;
+    view.dataset.hover = '';
+    closeBranchMenu();
+    $('#btn-prune').classList.toggle('active', mode === 'prune');
+    $('#btn-wire').classList.toggle('active', mode === 'wire');
+    updateStatus();
+  }
+
+  function doTimeLapse() {
+    if (guardPreview()) return;
+    simulate(3600, { offline: false, fx: true });
+    toast('⏩ one hour passes…');
+    updateAll(); save();
+  }
+
+  function freshTree() {
+    if (futureBarOpen) toggleFuture();
+    previewCache.clear();
+    tree = new B.TreeModel();
+    Object.assign(res, { water: 72, mist: 60, food: 55, health: 82 });
+    gp = 0; burnUntil = 0; soggy = 0; decals = []; decalsDirty = true; treeKey = '';
+    window.__bonsai.tree = tree;
+    toast('🌱 a brand-new bonsai arrives!');
+    updateAll(); save();
+  }
+
+  // ---------- simulation
+  function healthTarget(env) {
+    const w = res.water, m = res.mist, f = res.food;
+    let t = 1;
+    t *= w < 8 ? 0.15 : w < 30 ? 0.35 + ((w - 8) / 22) * 0.5 : 1;
+    t *= m < 12 ? 0.85 : m < 35 ? 0.93 : 1;
+    t *= f < 8 ? 0.88 : f <= 100 ? 1 : 0.9;
+    if (burnUntil > Date.now()) t *= 0.68;
+    t *= 1 - Math.min(0.3, soggy * 0.003);
+    if (env.frost) t *= 0.85;
+    if (env.temp >= 36 && env.ok) t *= 0.85;
+    if (statsCache && statsCache.tips >= 20) t *= 0.9;
+    return 100 * t;
+  }
+
+  function stepSim(dtH, opts) {
+    const env = B.Weather.env(new Date());
+    lastEnv = env;
+    const off = !!(opts && opts.offline);
+
+    res.water = clamp(res.water - dtH * (100 / 34) * env.dryMul, 0, 100);
+    if (env.rainWater) res.water = Math.max(res.water, Math.min(88, res.water + dtH * env.rainWater));
+    let mistIn = 0;
+    if (env.raining) mistIn += dtH * 10;
+    if (env.kind === 'fog') mistIn += dtH * 8;
+    res.mist = clamp(res.mist - dtH * (100 / 14) * env.mistMul + mistIn, 0, 100);
+    res.food = clamp(res.food - dtH * (100 / 110), 0, 130);
+    if (burnUntil && Date.now() > burnUntil) burnUntil = 0;
+    if (soggy > 0) soggy = Math.max(0, soggy - dtH * 8);
+
+    statsCache = tree.stats();
+    const target = healthTarget(env);
+    res.health = clamp(res.health + clamp(target - res.health, -9 * dtH, 7 * dtH), off ? 12 : 5, 100);
+
+    const segs = tree.segs.size;
+    const juv = segs < 26 ? 4.5 : segs < 60 ? 2 : 1;
+    const hf = res.health < 25 ? 0.06 : res.health < 60 ? 0.1 + ((res.health - 25) / 35) * 0.8 : 1;
+    const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
+    gp += 7 * dtH * env.growth * hf * ff * juv * (off ? 0.5 : 1);
+    tree.ageTips(dtH * env.growth * hf * 1.2);
+    const released = tree.ageWires(dtH);
+    if (released.length && opts && opts.fx) {
+      for (const r of released) {
+        sparkleFX(projectTreePt(r.at));
+        toast('🎉 the branch has set — wire off, shape kept!');
+      }
+    }
+    if (gp >= 1) {
+      const n = Math.min(30, Math.floor(gp));
+      gp -= n;
+      const evs = tree.grow(n);
+      if (opts && opts.fx) for (const e of evs) sparkleFX(projectTreePt(e.at));
+    }
+  }
+
+  function simulate(seconds, opts) {
+    let rem = seconds;
+    let guard = 400;
+    while (rem > 0 && guard-- > 0) {
+      const dt = Math.min(900, rem);
+      rem -= dt;
+      stepSim(dt / 3600, opts);
+    }
+  }
+
+  function tick() {
+    const now = Date.now();
+    const dtSec = clamp((now - lastTick) / 1000, 0, 72 * 3600);
+    lastTick = now;
+    if (dtSec > 5) simulate(dtSec, { offline: dtSec > 600, fx: false });
+    else stepSim(dtSec / 3600, { fx: true });
+    updateAll();
+    if (now - lastSaveAt > 45000) save();
+  }
+
+  // ---------- persistence
+  function save() {
+    lastSaveAt = Date.now();
+    store.set(KEY, JSON.stringify({
+      v: 1, ts: Date.now(),
+      res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
+      pan: Math.round(panY * 100) / 100,
+      gp, burnUntil, soggy,
+      decals: decals.slice(-48),
+      wx: B.Weather.serialize(),
+      tree: tree.serialize(),
+    }));
+  }
+
+  // ---------- FX overlay (screen-space pixel particles)
+  const fxCtx = fxCanvas.getContext('2d');
+  const parts = [];
+
+  function addPart(p) { if (parts.length < 420) parts.push(p); }
+
+  function canopyScreen() {
+    if (!canopy) return { x: BUF / 2, y: BUF / 2 - 20, w: 40, h: 30 };
+    const c = projectLocalPt(canopy.x, canopy.y, canopy.z);
+    return {
+      x: c.x, y: c.y,
+      w: Math.max(24, (canopy.maxX - canopy.minX) * PX_PER_UNIT * zoom),
+      h: Math.max(16, (canopy.maxY - canopy.minY) * PX_PER_UNIT * zoom),
+    };
+  }
+  function floorScreenY() {
+    return projectLocalPt(0, GEO.potTopY + 1, 0).y;
+  }
+
+  function waterFX() {
+    const c = canopyScreen();
+    for (let i = 0; i < 26; i++) {
+      addPart({
+        kind: 'drop', x: c.x + (fxRng.next() - 0.5) * c.w, y: c.y - c.h / 2 - 6 - fxRng.next() * 26,
+        vx: 0, vy: 90 + fxRng.next() * 50, ttl: 2, t: 0, c: '#5ea7d8', w: 1, h: 2,
+      });
+    }
+  }
+  function mistFX() {
+    const c = canopyScreen();
+    for (let i = 0; i < 10; i++) {
+      addPart({
+        kind: 'puff', x: c.x + (fxRng.next() - 0.5) * (c.w + 16), y: c.y + (fxRng.next() - 0.5) * c.h,
+        vx: (fxRng.next() - 0.5) * 6, vy: -3 - fxRng.next() * 4, ttl: 1.4, t: 0, c: '#ffffff', r: 2 + fxRng.next() * 3,
+      });
+    }
+  }
+  function feedFX() {
+    const fy = floorScreenY();
+    for (let i = 0; i < 7; i++) {
+      addPart({
+        kind: 'pellet', x: BUF / 2 + 30 + fxRng.next() * 10, y: fy - 55 - fxRng.next() * 10,
+        vx: -26 - fxRng.next() * 22, vy: -12 + fxRng.next() * 8, g: 150, floor: fy - 2 + fxRng.next() * 4,
+        ttl: 3, t: 0, c: PAL.decalPellet, w: 2, h: 2,
+      });
+    }
+  }
+  function sparkleFX(p) {
+    for (let i = 0; i < 4; i++) {
+      addPart({
+        kind: 'spark', x: p.x + (fxRng.next() - 0.5) * 4, y: p.y + (fxRng.next() - 0.5) * 4,
+        vx: (fxRng.next() - 0.5) * 12, vy: -8 - fxRng.next() * 8, ttl: 0.55, t: 0,
+        c: pick(['#ffffff', '#f7c9d6', '#f1a7bf']), w: 1, h: 1,
+      });
+    }
+  }
+  function debrisFX(p) {
+    const fy = floorScreenY();
+    for (let i = 0; i < 10; i++) {
+      addPart({
+        kind: 'pellet', x: p.x, y: p.y,
+        vx: (fxRng.next() - 0.5) * 60, vy: -30 - fxRng.next() * 40, g: 220, floor: fy + fxRng.next() * 3,
+        ttl: 2.4, t: 0, c: pick([PAL.trunk[1], PAL.trunk[2], PAL.leaf[1], PAL.leaf[2]]), w: 2, h: 2,
+      });
+    }
+  }
+
+  function fxFrame(dt, tms) {
+    fxCtx.clearRect(0, 0, BUF, BUF);
+    const env = lastEnv;
+    const fy = floorScreenY();
+
+    if (env && env.raining) {
+      const n = env.kind === 'storm' ? 3 : 2;
+      for (let i = 0; i < n; i++) {
+        addPart({ kind: 'rain', x: fxRng.next() * BUF, y: -4, vx: -env.wind * 0.25, vy: 150 + fxRng.next() * 60, ttl: 2, t: 0, c: '#8fb4d9', w: 1, h: 3, floor: fy + (fxRng.next() - 0.5) * 8 });
+      }
+    }
+    if (env && env.snowing && fxRng.next() < 0.5) {
+      addPart({ kind: 'snow', x: fxRng.next() * BUF, y: -3, vx: 0, vy: 14 + fxRng.next() * 8, ttl: 14, t: 0, c: '#ffffff', w: 2, h: 2, drift: fxRng.next() * 6.3 });
+    }
+    if (env && res.health > 60 && canopy && fxRng.next() < 0.006 + env.wind * 0.0006) {
+      const c = canopyScreen();
+      addPart({
+        kind: 'petal', x: c.x + (fxRng.next() - 0.5) * c.w, y: c.y + (fxRng.next() - 0.5) * c.h,
+        vx: env.wind * 0.15 * (fxRng.next() < 0.3 ? -1 : 1), vy: 10 + fxRng.next() * 8,
+        ttl: 8, t: 0, c: pick([PAL.leaf[1], PAL.leaf[2]]), w: 2, h: 1, drift: fxRng.next() * 6.3,
+      });
+    }
+
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.t += dt;
+      if (p.t > p.ttl) { parts.splice(i, 1); continue; }
+      if (p.g) p.vy += p.g * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      if (p.drift !== undefined) p.x += Math.sin(tms / 400 + p.drift) * 14 * dt;
+
+      if (p.kind === 'rain' || p.kind === 'drop') {
+        const limit = p.floor === undefined ? fy : p.floor;
+        if (p.y >= limit) {
+          parts.splice(i, 1);
+          if (fxRng.next() < 0.6) addPart({ kind: 'spark', x: p.x, y: limit - 1, vx: (fxRng.next() - 0.5) * 24, vy: -18, g: 160, ttl: 0.28, t: 0, c: p.c, w: 1, h: 1 });
+          continue;
+        }
+      }
+      if (p.kind === 'pellet' && p.y >= p.floor) { p.y = p.floor; p.vx *= 0.6; p.vy = 0; p.g = 0; }
+      if (p.kind === 'petal' && p.y >= fy) {
+        parts.splice(i, 1);
+        if (fxRng.next() < 0.35) {
+          const spot = B.Voxels.pebbleSpot(() => fxRng.next());
+          decals.push({ u: spot.u, v: spot.v, type: 'petal', ts: Date.now() });
+          decals = decals.slice(-48);
+          decalsDirty = true;
+        }
+        continue;
+      }
+
+      if (p.kind === 'puff') {
+        const k = p.t / p.ttl;
+        fxCtx.globalAlpha = 0.42 * (1 - k);
+        const r = Math.round(p.r + k * 5);
+        fxCtx.fillStyle = p.c;
+        fxCtx.fillRect(Math.round(p.x - r), Math.round(p.y - r / 2), r * 2, r);
+        fxCtx.globalAlpha = 1;
+      } else if (p.kind === 'spark') {
+        if ((tms / 80 | 0) % 2 === 0) { fxCtx.fillStyle = p.c; fxCtx.fillRect(p.x | 0, p.y | 0, p.w, p.h); }
+      } else {
+        fxCtx.fillStyle = p.c;
+        fxCtx.fillRect(p.x | 0, p.y | 0, p.w, p.h);
+      }
+    }
+  }
+
+  // ---------- sky / day-night
+  const SKY_STOPS = [
+    [0, 0x10141f], [5, 0x10141f], [6.5, 0xc9909a], [8, 0xf4f1ea],
+    [17.5, 0xf4f1ea], [19, 0xf0cfa6], [20.5, 0x4a4a6e], [21.5, 0x10141f], [24, 0x10141f],
+  ];
+  let cSky, cTmp, cGray, nightClass = false;
+
+  function skyFrame(tms) {
+    if (!cSky) { cSky = new THREE.Color(); cTmp = new THREE.Color(); cGray = new THREE.Color(); }
+    const now = new Date();
+    const h = now.getHours() + now.getMinutes() / 60;
+    let i = 0;
+    while (i < SKY_STOPS.length - 1 && SKY_STOPS[i + 1][0] < h) i++;
+    const [h0, c0] = SKY_STOPS[i], [h1, c1] = SKY_STOPS[Math.min(i + 1, SKY_STOPS.length - 1)];
+    const t = h1 === h0 ? 0 : clamp((h - h0) / (h1 - h0), 0, 1);
+    cSky.setHex(c0).lerp(cTmp.setHex(c1), t);
+
+    const env = lastEnv;
+    if (env && env.ok) {
+      const grayAmt = { clouds: 0.3, fog: 0.5, rain: 0.42, storm: 0.55, snow: 0.28 }[env.kind] || 0;
+      if (grayAmt) cSky.lerp(cGray.setHex(env.night ? 0x171c26 : 0xb9bec6), grayAmt);
+    }
+    if (previewTree) cSky.lerp(cGray.setHex(0xd9c8ec), 0.28);   // dreamy tint for visions
+    renderer.setClearColor(cSky);
+
+    const night = env ? env.night : (h < 6.5 || h >= 20);
+    const starTarget = night && (!env || env.kind === 'clear' || env.kind === 'none') ? 0.5 + 0.18 * Math.sin(tms / 900) : 0;
+    starMat.opacity += (starTarget - starMat.opacity) * 0.04;
+    if (night !== nightClass) {
+      nightClass = night;
+      document.body.classList.toggle('night', night);
+    }
+  }
+
+  // ---------- UI
+  function buildUI() {
+    for (const id of ['#bar-water', '#bar-mist', '#bar-food', '#bar-health']) {
+      const el = $(id);
+      for (let i = 0; i < 10; i++) el.appendChild(document.createElement('i'));
+    }
+    $('#btn-water').onclick = doWater;
+    $('#btn-mist').onclick = doMist;
+    $('#btn-feed').onclick = doFeed;
+    $('#btn-prune').onclick = () => setMode('prune');
+    $('#btn-wire').onclick = () => setMode('wire');
+    $('#bm-cut').onclick = () => {
+      const id = branchMenuSeg;
+      closeBranchMenu();
+      if (id !== null) doCut(id);
+    };
+    $('#bm-wire').onclick = () => {
+      const id = branchMenuSeg;
+      closeBranchMenu();
+      const seg = id !== null && tree.segs.get(id);
+      if (!seg) return;
+      if (seg.wired) {
+        tree.wire(id, false);
+        toast('➰ wire removed');
+        save();
+      } else if (tree.wire(id, true) !== null) {
+        toast('➰ wire on — drag the branch to bend · sets in ~2 days');
+        if (mode !== 'wire') setMode('wire');   // ready to bend right away
+        save();
+      }
+    };
+    document.addEventListener('pointerdown', (e) => {
+      if (branchMenuSeg !== null && e.target !== view && !branchMenuEl.contains(e.target)) closeBranchMenu();
+    }, true);
+    $('#btn-future').onclick = toggleFuture;
+    for (const b of document.querySelectorAll('#future-bar button')) {
+      b.onclick = () => setPreview(+b.dataset.years);
+    }
+    $('#zoom-in').onclick = () => applyZoom(zoom * 1.25);
+    $('#zoom-out').onclick = () => applyZoom(zoom / 1.25);
+    $('#btn-ff').onclick = doTimeLapse;
+    $('#btn-help').onclick = () => $('#modal-help').classList.remove('hidden');
+    $('#btn-settings').onclick = openSettings;
+    chipWeather.onclick = openSettings;
+    for (const b of document.querySelectorAll('.modal-close')) {
+      b.onclick = () => b.closest('.modal').classList.add('hidden');
+    }
+    for (const m of document.querySelectorAll('.modal')) {
+      m.addEventListener('pointerdown', (e) => { if (e.target === m) m.classList.add('hidden'); });
+    }
+    $('#btn-city-search').onclick = citySearch;
+    $('#city-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') citySearch(); });
+    $('#btn-geo').onclick = async () => {
+      toast('📍 asking your browser for location…');
+      const ok = await B.Weather.geolocate();
+      toast(ok ? '📍 location set!' : '📍 no luck — try searching your city instead');
+      if (ok) { updateChips(); save(); }
+    };
+    let resetArmed = 0;
+    $('#btn-reset').onclick = (e) => {
+      if (Date.now() - resetArmed < 3000) {
+        e.target.textContent = '🌱 NEW TREE';
+        $('#modal-settings').classList.add('hidden');
+        freshTree();
+      } else {
+        resetArmed = Date.now();
+        e.target.textContent = '⚠ REALLY? CLICK AGAIN';
+        setTimeout(() => { e.target.textContent = '🌱 NEW TREE'; }, 3000);
+      }
+    };
+  }
+
+  function openSettings() {
+    const st = B.Weather.st;
+    $('#loc-current').textContent = st.lat === null
+      ? 'location: not set — search a city below'
+      : `location: ${st.city || 'unknown'} (${st.lat.toFixed(2)}, ${st.lon.toFixed(2)})`;
+    $('#city-results').innerHTML = '';
+    $('#modal-settings').classList.remove('hidden');
+  }
+
+  async function citySearch() {
+    const q = $('#city-input').value.trim();
+    if (!q) return;
+    const box = $('#city-results');
+    box.textContent = 'searching…';
+    try {
+      const results = await B.Weather.searchCity(q);
+      box.innerHTML = '';
+      if (!results.length) { box.textContent = 'no matches found'; return; }
+      for (const r of results) {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = `${r.name}${r.admin ? ', ' + r.admin : ''} ${r.country ? '(' + r.country + ')' : ''}`;
+        b.onclick = async () => {
+          await B.Weather.setLocation(r.lat, r.lon, r.name);
+          $('#modal-settings').classList.add('hidden');
+          toast(`🌍 weather set to ${r.name}`);
+          updateChips(); save();
+        };
+        box.appendChild(b);
+      }
+    } catch (e) {
+      box.textContent = 'search failed — are you online?';
+    }
+  }
+
+  function setBar(id, v) {
+    const el = $(id);
+    const on = Math.round(clamp(v, 0, 100) / 10);
+    const cells = el.children;
+    for (let i = 0; i < 10; i++) cells[i].classList.toggle('on', i < on);
+    el.classList.toggle('low', v < 20);
+  }
+
+  function careNote() {
+    if (res.water < 15) return '💧 the soil is dry — water me!';
+    if (burnUntil > Date.now()) return '🔥 burnt roots — let the fertilizer fade';
+    if (soggy > 30) return '🫧 soggy roots — ease off the watering';
+    if (res.mist < 15) return '🌫 dry air — a misting would be lovely';
+    if (res.food < 10) return '🧪 hungry — a little fertilizer?';
+    if (statsCache && statsCache.tips >= 20) return '✂️ getting bushy — pruning helps it bloom';
+    let wireLeft = Infinity;
+    for (const s of tree.segs.values()) {
+      if (s.wired) wireLeft = Math.min(wireLeft, B.TreeCFG.wireSetHours - s.wireAge);
+    }
+    if (wireLeft !== Infinity) return `➰ wire training — the branch sets in ~${Math.max(1, Math.ceil(wireLeft))}h`;
+    if (res.health > 85 && statsCache && statsCache.blossoms >= 8) return '🌸 thriving!';
+    return null;
+  }
+
+  function updateStatus() {
+    let txt;
+    if (previewTree) txt = `🔮 your bonsai after ${previewYears} years of loving care — press NOW to return`;
+    else if (mode === 'prune') txt = '✂️ click a branch or blossom to cut — esc to exit';
+    else if (mode === 'wire') txt = '➰ click a branch, drag to bend · dbl-click unwires · esc exits';
+    else txt = careNote() || (lastEnv && lastEnv.note) || 'drag the pot 🌀 · tap: blossoms=mist, air=water, pebbles=feed, branch=✂️➰';
+    if (statusEl.textContent !== txt) statusEl.textContent = txt;
+  }
+
+  function updateChips() {
+    const now = new Date();
+    const env = lastEnv || B.Weather.env(now);
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    chipClock.textContent = `${env.night ? '🌙' : '☀️'} ${hh}:${mm}`;
+    const st = B.Weather.st;
+    if (st.lat === null) chipWeather.textContent = '📍 SET CITY';
+    else if (env.ok) chipWeather.textContent = `${env.emoji} ${Math.round(env.temp)}° · ${(env.city || '?').slice(0, 14)}`;
+    else chipWeather.textContent = `${env.emoji} ${(env.city || '…').slice(0, 14)}`;
+  }
+
+  function updateFacts() {
+    if (previewTree) {
+      const p = previewTree.stats();
+      $('#fact-stage').textContent = `🔮 +${previewYears}y vision`;
+      $('#fact-age').textContent = `age ${Math.floor(p.ageHours / 24)}d · ${p.segments} segs`;
+      $('#fact-bloom').textContent = `🌸 ${p.blossoms}`;
+      return;
+    }
+    const s = statsCache || tree.stats();
+    const stage = s.segments < 20 ? 'Sapling' : s.segments < 45 ? 'Young' : s.segments < 80 ? 'Shaped' : s.segments < 120 ? 'Mature' : 'Ancient';
+    $('#fact-stage').textContent = `${stage} bonsai`;
+    $('#fact-age').textContent = `age ${Math.floor(s.ageHours / 24)}d · ${s.segments} segs`;
+    $('#fact-bloom').textContent = `🌸 ${s.blossoms}`;
+  }
+
+  function updateAll() {
+    setBar('#bar-water', res.water);
+    setBar('#bar-mist', res.mist);
+    setBar('#bar-food', Math.min(100, res.food));
+    setBar('#bar-health', res.health);
+    updateStatus();
+    updateChips();
+    updateFacts();
+  }
+
+  // ---------- main loop
+  let lastFrameT = 0;
+  function frame(tms) {
+    requestAnimationFrame(frame);
+    const dt = Math.min(0.06, lastFrameT ? (tms - lastFrameT) / 1000 : 0.016);
+    lastFrameT = tms;
+    if (!drag || drag.type !== 'rotate') {
+      theta += thetaVel;
+      thetaVel *= 0.93;
+      if (Math.abs(thetaVel) < 0.0001) thetaVel = 0;
+    }
+    rotGroup.rotation.y = theta;
+    const swayA = lastEnv ? lastEnv.sway : 0.3;
+    treeMesh.rotation.z = Math.sin(tms / 625) * 0.012 * swayA;
+    treeMesh.rotation.x = Math.sin(tms / 900 + 2) * 0.008 * swayA;
+    syncTree();
+    syncPot();
+    syncDecals();
+    skyFrame(tms);
+    renderer.render(scene, camera);
+    fxFrame(dt, tms);
+  }
+
+  // ---------- boot
+  function boot() {
+    if (typeof THREE === 'undefined') {
+      return fatal('🌸 Pixel Bonsai needs internet the first time it loads (the 3D library comes from a CDN). Reconnect and refresh.');
+    }
+    let data = null;
+    try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { data = null; }
+    if (data && data.v !== 1) data = null;
+
+    tree = new B.TreeModel(data ? data.tree : null);
+    const hashTheta = /theta=(-?[\d.]+)/.exec(location.hash);
+    if (hashTheta) theta = parseFloat(hashTheta[1]);
+    if (data) {
+      Object.assign(res, data.res || {});
+      if (!hashTheta) theta = typeof data.theta === 'number' ? data.theta : -0.55;
+      gp = data.gp || 0;
+      burnUntil = data.burnUntil || 0;
+      soggy = data.soggy || 0;
+      decals = Array.isArray(data.decals) ? data.decals : [];
+      B.Weather.hydrate(data.wx);
+    }
+
+    try { setupScene(); } catch (e) {
+      return fatal('😢 WebGL is unavailable in this browser, and the bonsai needs it to grow. (' + e.message + ')');
+    }
+    applyZoom(data && typeof data.zoom === 'number' ? data.zoom : 1);
+    applyPan(data && typeof data.pan === 'number' ? data.pan : 0);
+
+    window.__bonsai = {
+      tree, res, simulate, setPreview, toggleFuture, applyZoom,
+      get env() { return lastEnv; },
+      get mode() { return mode; },
+      get zoom() { return zoom; },
+      get panY() { return panY; },
+      get theta() { return theta; },
+      get preview() { return previewTree ? previewYears : 0; },
+      projectLocal: (x, y, z) => projectLocalPt(x, y, z),
+      previewStats: () => previewTree && previewTree.stats(),
+      weather: B.Weather,
+      project: projectTreePt,
+      pick: pickAt,
+      sceneAt: (x, y) => pickScene(x, y),
+    };
+    const hashFF = /ff=(\d+)/.exec(location.hash);   // #ff=N — dev: fast-forward N hours
+    if (hashFF) simulate(parseInt(hashFF[1], 10) * 3600, { offline: false, fx: false });
+    buildUI();
+    bindInput();
+    lastEnv = B.Weather.env(new Date());
+
+    if (data && data.ts) {
+      const gapSec = clamp((Date.now() - data.ts) / 1000, 0, 72 * 3600);
+      if (gapSec > 60) {
+        const before = tree.stats().segments;
+        simulate(gapSec, { offline: true, fx: false });
+        const grew = tree.stats().segments - before;
+        if (gapSec > 2 * 3600) {
+          toast(`🌙 while you were away (${Math.round(gapSec / 3600)}h): ` +
+            (grew > 0 ? `the tree grew ${grew} new shoots` : 'the tree waited patiently'), { ms: 6000 });
+        }
+      }
+    } else {
+      toast('🌸 your bonsai has arrived! drag the pot to rotate — try ⏩ to watch it grow', { ms: 6500 });
+    }
+
+    B.Weather.onUpdate = () => { lastEnv = B.Weather.env(new Date()); updateChips(); updateStatus(); };
+    B.Weather.init();
+
+    updateAll();
+    save();
+    lastTick = Date.now();
+    setInterval(tick, 1000);
+    requestAnimationFrame(frame);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
