@@ -48,14 +48,22 @@
       b.onclick = () => { el.remove(); opts.action.fn(); };
       el.appendChild(b);
     }
+    if (!opts.action) {   // plain messages never stack — the new one replaces the old
+      for (const old of [...toastsEl.children]) if (!old.classList.contains('has-action')) old.remove();
+    }
     toastsEl.appendChild(el);
     while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
-    // messages appear near the pointer; bottom-center when the pointer is unknown/stale
+    // plain messages: one slot at the bottom of the scene; actionable
+    // toasts appear near the pointer (bottom-center when it's unknown)
     const idx = toastsEl.children.length - 1;
     const w = el.offsetWidth, h = el.offsetHeight;
     const fresh = lastPointer.t > 0 && performance.now() - lastPointer.t < 15000;
     let x, y;
-    if (fresh) {
+    if (!opts.action) {
+      const r = view.getBoundingClientRect();
+      x = clamp(r.left + r.width / 2 - w / 2, 8, window.innerWidth - w - 8);
+      y = clamp(r.bottom - h - (WALLPAPER ? 64 : 10), 8, window.innerHeight - h - 8);
+    } else if (fresh) {
       x = clamp(lastPointer.x + 14, 8, window.innerWidth - w - 8);
       y = clamp(lastPointer.y - h - 16 - idx * (h + 8), 8, window.innerHeight - h - 8);
     } else {
@@ -490,7 +498,7 @@
       if (s && (s.target === 'pot' || s.target === 'pebble')) {
         drag = { type: 'rotate', lastX: e.clientX, lastY: e.clientY, moved: 0, tap: s.target };
       } else if (mode === 'view') {
-        if (s && s.target === 'leaf') drag = { type: 'maybeTap', action: 'mist', start };
+        if (s && s.target === 'leaf') drag = { type: 'maybeTap', action: 'mist', segId: s.segId, start };
         else if (!s) drag = { type: 'maybeTap', action: 'water', start };   // pour from above
         else if (s && s.target === 'wire' && !previewTree) {
           // grab a placed wire: bend its branch right away (tap still opens the menu)
@@ -604,7 +612,19 @@
         if (drag.hit.kind === 'leaf') doTrim(drag.hit.segId);
         else toast('🍃 aim for the blossom pads');
       }
-      else if (drag.type === 'maybeTap') (drag.action === 'mist' ? doMist : doWater)();
+      else if (drag.type === 'maybeTap') {
+        if (drag.action === 'water') doWater();
+        else {
+          // mist right away — and offer a lone 🍃 button on that pad for 5s
+          doMist();
+          const id = drag.segId;
+          const seg = id !== undefined ? tree.segs.get(id) : null;
+          if (seg && !seg.children.length && !seg.cut &&
+              tree.leafRadius(seg) >= 2 && res.health >= 40 && !previewTree) {
+            openBranchMenu(id, e.clientX, e.clientY, 'pad');
+          }
+        }
+      }
       else if (drag.type === 'maybeBranch') openBranchMenu(drag.segId, e.clientX, e.clientY);
       else if (drag.type === 'rake') {
         if (drag.moved < 3 && drag.last) drawDimple(drag.last);
@@ -711,22 +731,35 @@
     save();
   }
 
-  // ---------- branch context menu (tap a branch → ✂️/➰ right there)
-  let branchMenuSeg = null;
+  // ---------- branch context menu (tap a branch → ✂️/➰; tap a pad → lone 🍃)
+  let branchMenuSeg = null, branchMenuTimer = null;
   const branchMenuEl = $('#branch-menu');
 
-  function openBranchMenu(segId, clientX, clientY) {
+  function openBranchMenu(segId, clientX, clientY, kind) {
     const seg = tree.segs.get(segId);
     if (!seg || previewTree) return;
+    clearTimeout(branchMenuTimer);
+    branchMenuTimer = null;
     branchMenuSeg = segId;
-    $('#bm-wire').textContent = seg.wired ? '➰ UNWIRE' : '➰ WIRE';
+    const pad = kind === 'pad';
+    $('#bm-cut').classList.toggle('hidden', pad);
+    $('#bm-wire').classList.toggle('hidden', pad);
+    $('#bm-trim').classList.toggle('hidden', !pad);
+    if (!pad) {
+      $('#bm-wire').textContent = seg.wired ? '➰ UNWIRE' : '➰ WIRE';
+      $('#bm-wire').classList.toggle('unwire', !!seg.wired);
+    }
     const stack = $('#canvas-stack').getBoundingClientRect();
     branchMenuEl.classList.remove('hidden');
     const mw = branchMenuEl.offsetWidth || 130, mh = branchMenuEl.offsetHeight || 34;
-    branchMenuEl.style.left = clamp(clientX - stack.left - mw / 2, 4, stack.width - mw - 4) + 'px';
-    branchMenuEl.style.top = clamp(clientY - stack.top - mh - 12, 4, stack.height - mh - 4) + 'px';
+    // keep clear daylight between the cursor and the buttons
+    branchMenuEl.style.left = clamp(clientX - stack.left - mw / 2 + 18, 4, stack.width - mw - 4) + 'px';
+    branchMenuEl.style.top = clamp(clientY - stack.top - mh - 28, 4, stack.height - mh - 4) + 'px';
+    if (pad) branchMenuTimer = setTimeout(closeBranchMenu, 5000);   // fades back to normal
   }
   function closeBranchMenu() {
+    clearTimeout(branchMenuTimer);
+    branchMenuTimer = null;
     branchMenuSeg = null;
     branchMenuEl.classList.add('hidden');
   }
@@ -800,10 +833,10 @@
     waterFX(); updateAll(); save();
   }
 
-  function doMist() {
+  function doMist(quiet) {
     if (guardPreview()) return;
     res.mist = clamp(res.mist + 45, 0, 100);
-    toast(pick(['🌫 psssst — the leaves glisten', '🌫 a fine morning mist', '🌫 mountain air vibes']));
+    if (!quiet) toast(pick(['🌫 psssst — the leaves glisten', '🌫 a fine morning mist', '🌫 mountain air vibes']));
     mistFX(); updateAll(); save();
   }
 
@@ -1241,6 +1274,11 @@
       const id = branchMenuSeg;
       closeBranchMenu();
       if (id !== null) doCut(id);
+    };
+    $('#bm-trim').onclick = () => {
+      const id = branchMenuSeg;
+      closeBranchMenu();
+      if (id !== null) doTrim(id);
     };
     $('#bm-wire').onclick = () => {
       const id = branchMenuSeg;

@@ -191,6 +191,7 @@ button.chip:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink);
   touch-action: manipulation;
 }
 #branch-menu button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+#bm-wire.unwire { background: #b0713c; color: #fff; }   /* copper = wire comes OFF */
 
 #fatal {
   position: absolute;

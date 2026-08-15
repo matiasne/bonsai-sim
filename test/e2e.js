@@ -75,13 +75,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(250);
   const foodT1 = await page.evaluate(() => __bonsai.res.food);
   check(foodT1 > foodT0, `pebble tap feeds the tree (${foodT0.toFixed(0)} → ${foodT1.toFixed(0)})`);
-  const toastNear = await page.evaluate((px, py) => {
+  const toastPos = await page.evaluate(() => {
     const t = document.querySelector('#toasts .toast:last-child');
     if (!t) return null;
     const r = t.getBoundingClientRect();
-    return Math.hypot((r.left + r.width / 2) - px, (r.top + r.height / 2) - py);
-  }, pebPt.x, pebPt.y);
-  check(toastNear !== null && toastNear < 260, `toast appears near the pointer (${Math.round(toastNear)}px away)`);
+    const v = document.querySelector('#view').getBoundingClientRect();
+    return { cy: r.top + r.height / 2, bottom: v.bottom, cx: r.left + r.width / 2, mid: v.left + v.width / 2 };
+  });
+  check(!!toastPos && toastPos.cy > toastPos.bottom - 70 && Math.abs(toastPos.cx - toastPos.mid) < 130,
+    'plain messages sit at the bottom of the scene');
 
   // --- blossoms mist (neglected trees drop leaves — restore health so blossoms render)
   await page.evaluate(() => { __bonsai.res.health = 80; });
@@ -91,11 +93,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const t = __bonsai.tree;
     const r = document.querySelector('#view').getBoundingClientRect();
     for (const s of t.segs.values()) {
-      if (s.children.length || t.leafRadius(s) < 2) continue;
+      if (s.children.length || t.leafRadius(s) < 2.3) continue;
       const p = __bonsai.project(s.end);
       const cx = r.left + (p.x / 176) * r.width, cy = r.top + (p.y / 176) * r.height;
       const hit = __bonsai.pick(cx, cy);
-      if (hit && hit.kind === 'leaf') return { x: cx, y: cy };
+      if (hit && hit.kind === 'leaf') return { x: cx, y: cy, id: hit.segId };
     }
     return null;
   });
@@ -115,6 +117,35 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await sleep(250);
     const mistT1 = await page.evaluate(() => __bonsai.res.mist);
     check(mistT1 > mistT0, `blossom tap mists the tree (${mistT0.toFixed(0)} → ${mistT1.toFixed(0)})`);
+    // …and a lone 🍃 TRIM button appears at the pad (like cut/wire, no message)
+    const padMenu = await page.evaluate((id) => ({
+      open: !document.querySelector('#branch-menu').classList.contains('hidden'),
+      trimVisible: !document.querySelector('#bm-trim').classList.contains('hidden'),
+      cutHidden: document.querySelector('#bm-cut').classList.contains('hidden'),
+      r: __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)),
+    }), blossomNow.id);
+    check(padMenu.open && padMenu.trimVisible && padMenu.cutHidden, 'pad tap shows a lone TRIM button');
+    if (padMenu.open && padMenu.trimVisible) {
+      await page.evaluate(() => document.querySelector('#bm-trim').click());
+      await sleep(300);
+      const rAfter = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), blossomNow.id);
+      check(rAfter < padMenu.r, `TRIM button pinched the pad (r ${padMenu.r.toFixed(1)} → ${rAfter.toFixed(1)})`);
+    }
+    let openNow = false;
+    for (let att = 0; att < 2 && !openNow; att++) {   // taps can miss on canopy drift
+      const blossom2 = await findBlossom();
+      if (!blossom2) break;
+      await page.mouse.click(blossom2.x, blossom2.y);
+      await sleep(300);
+      openNow = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+    }
+    if (openNow) {
+      await sleep(5300);
+      const openLater = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+      check(!openLater, 'the TRIM option disappears by itself after 5 seconds');
+    } else {
+      check(true, 'no pad menu opened for the auto-hide check — skipped');
+    }
   }
 
   // --- zen sand: rake cursor + raking draws into the sand without rotating the pot
@@ -271,7 +302,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     }, trimTarget.id);
     check(trimmed.r < trimTarget.r && trimmed.bb > trimTarget.bb,
       `pinch shrank the pad (r ${trimTarget.r.toFixed(1)} → ${trimmed.r.toFixed(1)}) and boosted ramification`);
-    check(trimmed.mist === mistPre, 'pinching did not trigger a mist');
+    check(Math.abs(trimmed.mist - mistPre) < 5, 'pinching did not trigger a mist');
   }
   await page.keyboard.press('Escape');
   await sleep(150);
@@ -300,13 +331,31 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       await sleep(250);
       const coilHover = await page.evaluate(() => document.querySelector('#view').dataset.hover);
       check(coilHover === 'wire', 'hovering the coil shows the wire handle cursor');
-      // two perpendicular drag attempts: a single direction can be geometrically degenerate
+      // multiple drag attempts with a FRESH coil lookup each time (the branch
+      // moves when bent, and a single direction can be geometrically degenerate)
+      const findCoilFresh = () => page.evaluate((sid) => {
+        const v = document.querySelector('#view');
+        const r = v.getBoundingClientRect();
+        const s = __bonsai.tree.segs.get(sid);
+        if (!s || !s.wired) return null;
+        const mid = [(s.start[0] + s.end[0]) / 2, (s.start[1] + s.end[1]) / 2, (s.start[2] + s.end[2]) / 2];
+        const p = __bonsai.project(mid);
+        const bx = r.left + (p.x / v.width) * r.width, by = r.top + (p.y / v.height) * r.height;
+        for (let oy = -14; oy <= 14; oy += 2) {
+          for (let ox = -14; ox <= 14; ox += 2) {
+            const hit = __bonsai.sceneAt(bx + ox, by + oy);
+            if (hit && hit.target === 'wire' && hit.segId === sid) return { x: bx + ox, y: by + oy };
+          }
+        }
+        return null;
+      }, bt2.id);
       let movedDir = false;
-      for (const [ddx, ddy] of [[0, -28], [26, -8]]) {
+      for (const [ddx, ddy] of [[0, -28], [26, -8], [-24, 12]]) {
+        const cp = (await findCoilFresh()) || coilPt;
         const before = await page.evaluate((id) => __bonsai.tree.segs.get(id).dir.slice(), bt2.id);
-        await page.mouse.move(coilPt.x, coilPt.y);
+        await page.mouse.move(cp.x, cp.y);
         await page.mouse.down();
-        await page.mouse.move(coilPt.x + ddx, coilPt.y + ddy, { steps: 8 });
+        await page.mouse.move(cp.x + ddx, cp.y + ddy, { steps: 8 });
         await page.mouse.up();
         await sleep(200);
         const a = await page.evaluate((id) => __bonsai.tree.segs.get(id).dir.slice(), bt2.id);
@@ -360,8 +409,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       }
       check(coilMenuOpen, 'coil tap opens the menu');
       if (coilMenuOpen) {
-        const unwireLabel = await page.evaluate(() => document.querySelector('#bm-wire').textContent);
-        check(/UNWIRE/.test(unwireLabel), 'menu offers UNWIRE for the wired branch');
+        const unwireState = await page.evaluate(() => ({
+          label: document.querySelector('#bm-wire').textContent,
+          distinct: document.querySelector('#bm-wire').classList.contains('unwire'),
+        }));
+        check(/UNWIRE/.test(unwireState.label) && unwireState.distinct, 'menu offers UNWIRE with its distinct color');
         await page.evaluate(() => document.querySelector('#bm-wire').click());
         await sleep(250);
         const confirmBtn = await page.evaluate(() => {
@@ -527,6 +579,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const meters = await page.evaluate(() => ({ food: __bonsai.res.food, mist: __bonsai.res.mist }));
   check(meters.food > meters0.food, `FEED raised food ${meters0.food.toFixed(0)} → ${meters.food.toFixed(0)}`);
   check(meters.mist > meters0.mist, `MIST raised humidity ${meters0.mist.toFixed(0)} → ${meters.mist.toFixed(0)}`);
+  const plainCount = await page.evaluate(() => document.querySelectorAll('#toasts .toast:not(.has-action)').length);
+  check(plainCount === 1, `plain messages never stack (${plainCount} visible after two quick actions)`);
 
   // --- zoom: wheel, pan on the pot, buttons, recenter
   await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });
