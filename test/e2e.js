@@ -75,12 +75,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(250);
   const foodT1 = await page.evaluate(() => __bonsai.res.food);
   check(foodT1 > foodT0, `pebble tap feeds the tree (${foodT0.toFixed(0)} → ${foodT1.toFixed(0)})`);
+  const toastNear = await page.evaluate((px, py) => {
+    const t = document.querySelector('#toasts .toast:last-child');
+    if (!t) return null;
+    const r = t.getBoundingClientRect();
+    return Math.hypot((r.left + r.width / 2) - px, (r.top + r.height / 2) - py);
+  }, pebPt.x, pebPt.y);
+  check(toastNear !== null && toastNear < 260, `toast appears near the pointer (${Math.round(toastNear)}px away)`);
 
   // --- blossoms mist (neglected trees drop leaves — restore health so blossoms render)
   await page.evaluate(() => { __bonsai.res.health = 80; });
   await sleep(400);
   const mistT0 = await page.evaluate(() => __bonsai.res.mist);
-  const blossomPt = await page.evaluate(() => {
+  const findBlossom = () => page.evaluate(() => {
     const t = __bonsai.tree;
     const r = document.querySelector('#view').getBoundingClientRect();
     for (const s of t.segs.values()) {
@@ -92,6 +99,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     }
     return null;
   });
+  const blossomPt = await findBlossom();
   check(!!blossomPt, 'found a visible blossom to tap');
   if (blossomPt) {
     await page.mouse.move(blossomPt.x, blossomPt.y);
@@ -101,13 +109,16 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       c: getComputedStyle(document.querySelector('#view')).cursor,
     }));
     check(mistHover.h === 'leaf' && /svg/.test(mistHover.c), 'blossom hover shows the spray-bottle cursor');
-    await page.mouse.click(blossomPt.x, blossomPt.y);
+    // re-find right before clicking: the live sim may have grown/shifted the canopy
+    const blossomNow = (await findBlossom()) || blossomPt;
+    await page.mouse.click(blossomNow.x, blossomNow.y);
     await sleep(250);
     const mistT1 = await page.evaluate(() => __bonsai.res.mist);
     check(mistT1 > mistT0, `blossom tap mists the tree (${mistT0.toFixed(0)} → ${mistT1.toFixed(0)})`);
   }
 
   // --- zen sand: rake cursor + raking draws into the sand without rotating the pot
+  await page.keyboard.press('Escape');    // clear any stray branch menu first
   await page.keyboard.press('ArrowLeft');
   await sleep(200);
   const sandPts = await page.evaluate(() => {
@@ -468,6 +479,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(meters.mist > meters0.mist, `MIST raised humidity ${meters0.mist.toFixed(0)} → ${meters.mist.toFixed(0)}`);
 
   // --- zoom: wheel, pan on the pot, buttons, recenter
+  await page.evaluate(() => { for (const t of document.querySelectorAll('.toast')) t.remove(); });
   const z0 = await page.evaluate(() => __bonsai.zoom);
   await page.mouse.move(rect.left + rect.w / 2, rect.top + rect.h / 2);
   await page.mouse.wheel({ deltaY: -400 });

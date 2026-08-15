@@ -277,17 +277,14 @@ body.night .btn.danger { color: #e08a7e; border-color: #e08a7e; box-shadow: 0 4p
 
 #toasts {
   position: fixed;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
+  inset: 0;
   z-index: 20;
   pointer-events: none;
 }
 .toast {
+  position: absolute;
+  max-width: 300px;
+  pointer-events: none;        /* plain messages never block clicks… */
   background: var(--ink);
   color: var(--paper);
   font-size: 11px;
@@ -296,11 +293,11 @@ body.night .btn.danger { color: #e08a7e; border-color: #e08a7e; box-shadow: 0 4p
   border: 2px solid var(--paper);
   box-shadow: 0 3px 0 rgba(0,0,0,.35);
   animation: toast-in .18s steps(3) both;
-  pointer-events: auto;
   display: flex;
   gap: 10px;
   align-items: center;
 }
+.toast.has-action { pointer-events: auto; }   /* …only actionable toasts are clickable */
 .toast button {
   font: inherit;
   background: var(--paper);
@@ -379,7 +376,6 @@ html.wallpaper #zoom-ctl,
 html.wallpaper #future-bar,
 html.wallpaper .modal { display: none !important; }
 /* the branch ✂️/➰ menu and toasts (cut-undo, wire feedback) stay usable on the desktop */
-html.wallpaper #toasts { bottom: 48px; }
 html.wallpaper #stage-frame { min-width: 0; }
 html.wallpaper #canvas-stack {
   position: fixed;

@@ -32,12 +32,17 @@
     fatalEl.classList.remove('hidden');
   }
 
+  const lastPointer = { x: 0, y: 0, t: 0 };
+  document.addEventListener('pointermove', (e) => { lastPointer.x = e.clientX; lastPointer.y = e.clientY; lastPointer.t = performance.now(); }, { passive: true });
+  document.addEventListener('pointerdown', (e) => { lastPointer.x = e.clientX; lastPointer.y = e.clientY; lastPointer.t = performance.now(); }, { capture: true, passive: true });
+
   function toast(msg, opts) {
     opts = opts || {};
     const el = document.createElement('div');
     el.className = 'toast';
     el.textContent = msg;
     if (opts.action) {
+      el.classList.add('has-action');
       const b = document.createElement('button');
       b.textContent = opts.action.label;
       b.onclick = () => { el.remove(); opts.action.fn(); };
@@ -45,6 +50,20 @@
     }
     toastsEl.appendChild(el);
     while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
+    // messages appear near the pointer; bottom-center when the pointer is unknown/stale
+    const idx = toastsEl.children.length - 1;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const fresh = lastPointer.t > 0 && performance.now() - lastPointer.t < 15000;
+    let x, y;
+    if (fresh) {
+      x = clamp(lastPointer.x + 14, 8, window.innerWidth - w - 8);
+      y = clamp(lastPointer.y - h - 16 - idx * (h + 8), 8, window.innerHeight - h - 8);
+    } else {
+      x = Math.max(8, (window.innerWidth - w) / 2);
+      y = window.innerHeight - h - (WALLPAPER ? 72 : 28) - idx * (h + 8);
+    }
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
     setTimeout(() => el.remove(), opts.ms || 3400);
   }
 
