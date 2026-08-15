@@ -98,7 +98,8 @@ button.chip:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink);
 
 /* view-mode contextual cursors: the scene advertises its tap actions */
 #view[data-mode="view"][data-hover="leaf"] {
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cg%20stroke='%2322303f'%20stroke-width='1.5'%20fill='%23e6f2f7'%3E%3Ccircle%20cx='9'%20cy='17'%20r='6'/%3E%3Ccircle%20cx='17'%20cy='13'%20r='7'/%3E%3Ccircle%20cx='21'%20cy='19'%20r='5'/%3E%3C/g%3E%3C/svg%3E") 14 14, pointer;
+  /* spray bottle, nozzle + mist at the hotspot */
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cg%20stroke='%2322303f'%20stroke-width='1.5'%3E%3Crect%20x='10'%20y='12'%20width='12'%20height='14'%20rx='2'%20fill='%23cfe9f5'/%3E%3Crect%20x='13'%20y='9'%20width='6'%20height='4'%20fill='%239fc6e8'/%3E%3Crect%20x='10'%20y='4'%20width='11'%20height='6'%20rx='1'%20fill='%234f9bd8'/%3E%3Crect%20x='5'%20y='5'%20width='5'%20height='3'%20fill='%234f9bd8'/%3E%3Cpath%20d='M12%2010%20v4%20h3'%20fill='none'/%3E%3C/g%3E%3Cg%20fill='%23eaf5fb'%20stroke='%2322303f'%20stroke-width='1'%3E%3Ccircle%20cx='3'%20cy='3'%20r='1.5'/%3E%3Ccircle%20cx='2.5'%20cy='7.5'%20r='1.5'/%3E%3Ccircle%20cx='4'%20cy='11'%20r='1.5'/%3E%3C/g%3E%3C/svg%3E") 4 7, pointer;
 }
 #view[data-mode="view"][data-hover="sky"] {
   cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cpath%20d='M14%203%20C10%2010%207%2014%207%2018%20a7%207%200%200%200%2014%200%20C21%2014%2018%2010%2014%203%20z'%20fill='%234f9bd8'%20stroke='white'%20stroke-width='2.5'/%3E%3C/svg%3E") 14 14, pointer;
