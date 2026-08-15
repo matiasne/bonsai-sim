@@ -7,13 +7,14 @@
 
   // ---------- constants
   const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
-  const BUFH = 176;                 // backbuffer height (fixed pixel scale; CSS upscales)
+  let BUFH = 176;                   // backbuffer height (pixel density × 176; CSS upscales)
   let BUFW = 176;                   // width follows the screen in wallpaper mode
   let aspect = 1;
+  const RES_SCALES = [1, 1.5, 2];   // pixel-density steps for the ▦ button
+  let resIdx = 0;
   const HALF = 44;                  // ortho half-HEIGHT in world units → 2 buffer px per voxel
   const LOOK_Y = 31;
   const ELEV = 0.165;               // camera elevation (rad)
-  const PX_PER_UNIT = BUFH / (2 * HALF);
   const KEY = 'pixel-bonsai-v1';
   const SLOP = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
 
@@ -358,6 +359,24 @@
     camera.left = -HALF * aspect;
     camera.right = HALF * aspect;
     camera.updateProjectionMatrix();
+  }
+
+  // Pixel density: same view, more (or fewer) pixels — see how the art reads.
+  function applyRes(i) {
+    resIdx = ((i % RES_SCALES.length) + RES_SCALES.length) % RES_SCALES.length;
+    const k = RES_SCALES[resIdx];
+    BUFH = Math.round(176 * k);
+    if (WALLPAPER) {
+      applyViewport();
+    } else {
+      BUFW = BUFH;
+      renderer.setSize(BUFW, BUFH, false);
+      fxCanvas.width = BUFW;
+      fxCanvas.height = BUFH;
+    }
+    const label = k === 1 ? '1×' : k === 1.5 ? '1.5×' : '2×';
+    const b = $('#btn-res');
+    if (b) b.textContent = label;
   }
 
   function applyZoom(z) {
@@ -1039,7 +1058,7 @@
     store.set(KEY, JSON.stringify({
       v: 1, ts: Date.now(),
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
-      pan: Math.round(panY * 100) / 100,
+      pan: Math.round(panY * 100) / 100, pix: resIdx,
       gp, burnUntil, soggy, trim: Math.round(trimBoost * 100) / 100,
       decals: decals.slice(-48),
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
@@ -1082,10 +1101,11 @@
   function canopyScreen() {
     if (!canopy) return { x: BUFW / 2, y: BUFH / 2 - 20, w: 40, h: 30 };
     const c = projectLocalPt(canopy.x, canopy.y, canopy.z);
+    const ppu = BUFH / (2 * HALF);
     return {
       x: c.x, y: c.y,
-      w: Math.max(24, (canopy.maxX - canopy.minX) * PX_PER_UNIT * zoom),
-      h: Math.max(16, (canopy.maxY - canopy.minY) * PX_PER_UNIT * zoom),
+      w: Math.max(24, (canopy.maxX - canopy.minX) * ppu * zoom),
+      h: Math.max(16, (canopy.maxY - canopy.minY) * ppu * zoom),
     };
   }
   function floorScreenY() {
@@ -1335,6 +1355,7 @@
     }
     $('#zoom-in').onclick = () => applyZoom(zoom * 1.25);
     $('#zoom-out').onclick = () => applyZoom(zoom / 1.25);
+    $('#btn-res').onclick = () => { applyRes(resIdx + 1); save(); };
     $('#btn-ff').onclick = doTimeLapse;
     $('#btn-help').onclick = () => $('#modal-help').classList.remove('hidden');
     $('#btn-settings').onclick = openSettings;
@@ -1558,12 +1579,14 @@
     }
     applyZoom(data && typeof data.zoom === 'number' ? data.zoom : 1);
     applyPan(data && typeof data.pan === 'number' ? data.pan : 0);
+    applyRes(data && typeof data.pix === 'number' ? data.pix : 0);
 
     window.__bonsai = {
       tree, res, simulate, setPreview, toggleFuture, applyZoom,
       get env() { return lastEnv; },
       get mode() { return mode; },
       get zoom() { return zoom; },
+      get pix() { return { idx: resIdx, bufW: BUFW, bufH: BUFH }; },
       get panY() { return panY; },
       get theta() { return theta; },
       get preview() { return previewTree ? previewYears : 0; },

@@ -677,6 +677,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.click('#zoom-in');
   await sleep(120);
 
+  // --- pixel density button: same view, more pixels
+  await page.click('#btn-res');
+  await sleep(250);
+  const res15 = await page.evaluate(() => ({ bufH: __bonsai.pix.bufH, w: document.querySelector('#view').width }));
+  check(res15.bufH === 264 && res15.w === 264, `▦ raises the backbuffer to 1.5× (${res15.w}px)`);
+  const potAtRes = await page.evaluate(() => {
+    const v = document.querySelector('#view');
+    const r = v.getBoundingClientRect();
+    const p = __bonsai.projectLocal(0, 5, 0);
+    const s = __bonsai.sceneAt(r.left + (p.x / v.width) * r.width, r.top + (p.y / v.height) * r.height);
+    return s && s.target;
+  });
+  check(potAtRes === 'pot' || potAtRes === 'pebble', `picking stays aligned at higher density (${potAtRes})`);
+  await page.click('#btn-res');
+  await sleep(250);
+  const res2 = await page.evaluate(() => __bonsai.pix.bufH);
+  check(res2 === 352, '▦ cycles to 2×');
+  await page.click('#btn-res');   // back to 1× for the rest of the suite
+  await sleep(250);
+
   // --- future preview
   const nowSegs = await page.evaluate(() => __bonsai.tree.segs.size);
   await page.click('#btn-future');

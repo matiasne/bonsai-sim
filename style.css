@@ -146,6 +146,7 @@ button.chip:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink);
   touch-action: manipulation;
 }
 #zoom-ctl button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+#zoom-ctl #btn-res { font-size: 9px; letter-spacing: 0; }
 
 #future-bar {
   position: absolute;
