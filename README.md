@@ -73,23 +73,53 @@ nearly stops — like a real deciduous sakura). Growth pace is tuned near real l
 a recognizable silhouette takes about a month and a half; girth and density keep refining for
 a year and beyond. Fertilizer barely depletes in winter, and wires set faster in the growing season.
 
+The season curve is the **only** thing that drives growth speed besides your care — it's a pure
+function of the calendar and hemisphere, which is what makes every bonsai exactly reproducible
+from its DNA (below).
+
 ## Real time & weather
 
 - Location: silent IP lookup → or search your city → or 📍 precise geolocation.
 - [Open-Meteo](https://open-meteo.com) (keyless) supplies temperature, humidity, rain, wind, day/night.
-- **Rain waters the tree** (up to a safe level), frost/snow make it dormant, wind makes it
-  sway and shed petals, night slows growth, heat dries the soil faster.
-- Progress persists in `localStorage`; on return the elapsed time (capped at 72 h) is simulated.
+- Weather is **ambience**: rain streaks and smooths the raked sand, frost dusts the pads, wind
+  makes the tree sway and shed petals, the sky follows your day/night. It never changes growth —
+  that would make a shared tree impossible to verify.
+- Progress persists in `localStorage`; on return the elapsed time (capped at 72 h) is simulated
+  at half pace.
+
+## 🧬 DNA — your bonsai is a seed plus its history
+
+Since the tree can die, every surviving bonsai is proof of real care — and the whole game is built
+so that a bonsai **is** its history:
+
+- A tree is exactly `(seed, genesis time, hemisphere, action log)` — an *envelope*. Saves store
+  no geometry: every boot **replays the log** and must land on the identical tree, bit for bit
+  (`__bonsai.verifyReplay()` checks this live).
+- Every action you take — water, mist, feed, cut, pinch, wire, unwire, bend (quantized), offline
+  gaps, time-lapses — is an event with a sim-timestamp. The sim advances in fixed 15-minute
+  quanta, so replay and live play take the exact same path. Even **death is a replayable fact**:
+  the log of a neglected tree proves when it died.
+- **⚙ → 🧬 COPY DNA LINK** copies a URL (~1 KB, deflate + base64url of the canonical envelope)
+  that opens a **read-only viewer** of your exact tree on any machine — it replays your whole
+  history in milliseconds and touches nothing locally.
+
+This is also deliberate groundwork for optional on-chain ownership: an NFT would store just the
+envelope (or its hash + event log), and anyone could re-derive and verify the tree. Caveats before
+that leap: replay is bit-identical on the same JS engine but `Math.sin/cos/pow` are not spec-pinned
+across engines (a fixed-point math pass would be needed for trustless verification), and the
+integer event format (`["W",t]`, `["B",t,id,ax,ay,az,a]`, …) maps 1:1 onto a compact binary
+encoding when the time comes.
 
 ## Project layout
 
 | File | Role |
 |---|---|
 | `js/tree.js` | pure segment-graph tree model + generative growth (Node-testable) |
+| `js/sim.js` | deterministic sim core: fixed-step integrator, season curve, action/event vocabulary, replay, DNA codec |
 | `js/voxels.js` | palette + voxel generation: pot, pebbles, wood, blossom puffs, wire coils |
-| `js/weather.js` | Open-Meteo + location chain + environment factors |
-| `js/game.js` | three.js scene (instanced voxels, orthographic pixel look), sim tick, input, FX, UI |
-| `test/smoke.js` | headless test: 90-day growth run, caps, prune/wire, serialization |
+| `js/weather.js` | Open-Meteo + location chain + visual environment factors |
+| `js/game.js` | three.js scene (instanced voxels, orthographic pixel look), event logging, wall-clock scheduling, input, FX, UI |
+| `test/smoke.js` | headless test: growth run, caps, prune/wire, replay identity, DNA round-trip |
 
 Rendering: a 176×176 backbuffer upscaled with `image-rendering: pixelated`;
 two `InstancedMesh`es of unit cubes with baked palette shading (no lights) — that's the
@@ -104,6 +134,6 @@ node test/smoke.js
 ## Tuning
 
 - Growth pace/caps: `CFG` at the top of `js/tree.js`
-- Meters & decay rates: `stepSim()` in `js/game.js`
+- Meters, decay rates & pace: `step()` / `PACE` in `js/sim.js` (⚠ changes alter what old logs replay to)
 - Palette: `PAL` in `js/voxels.js`
 - Pixel chunkiness: `HALF` in `js/game.js` (44 = chunky, 88 = fine)

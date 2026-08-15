@@ -409,5 +409,20 @@ console.log('event log + replay (the envelope IS the tree)');
     ok(code[0] === '1' && code.length < SIM.canonical(env).length + 2, 'deflate codec engaged');
   }
 
+  console.log('replay performance');
+  {
+    const yearEnv = { v: 2, seed: 2027, g: G0, s: 0, t: 366 * 86400, e: [] };
+    for (let d = 0; d < 366; d++) {   // twice-daily watering keeps up with the drain
+      yearEnv.e.push(['W', d * 86400], ['M', d * 86400]);
+      if (d % 3 === 0) yearEnv.e.push(['F', d * 86400]);
+      yearEnv.e.push(['W', d * 86400 + 43200]);
+    }
+    const t0 = Date.now();
+    const yr = SIM.replay(yearEnv);
+    const ms = Date.now() - t0;
+    ok(!yr.res.dead && yr.tree.segs.size > 60, `a cared-for year replays alive (${yr.tree.segs.size} segs)`);
+    ok(ms < 2000, `one sim-year (35k steps, ${yearEnv.e.length} events) replays in ${ms}ms`);
+  }
+
   console.log(`\nPASS — ${passed} checks. Tree: ${t.segs.size} segs, height ${t.stats().height.toFixed(1)}, ${t.stats().blossoms} blossoms, ${built.voxels.length} voxels.`);
 })().catch((e) => { console.error('FAIL —', e); process.exit(1); });

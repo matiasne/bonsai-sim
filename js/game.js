@@ -1681,6 +1681,18 @@
       get viewer() { return VIEWER; },
       dna: () => { dna.t = S.simT; return JSON.parse(SIM.canonical(dna)); },
       dnaCode: () => { dna.t = S.simT; return SIM.dnaEncode(dna); },
+      verifyReplay: () => {   // replay the envelope and diff it against the live state
+        dna.t = S.simT;
+        const r = SIM.replay(JSON.parse(SIM.canonical(dna)));
+        const pick = (st) => ({
+          rng: st.tree.rng.state, segs: st.tree.segs.size, tree: JSON.stringify(st.tree.serialize()),
+          res: JSON.stringify(st.res), gp: st.gp, burnH: st.burnH, soggy: st.soggy,
+          trim: st.trimBoost, dying: st.dyingH, simT: st.simT,
+        });
+        const a = pick(S), b = pick(r);
+        const diffs = Object.keys(a).filter(k => a[k] !== b[k]);
+        return { ok: diffs.length === 0, diffs, live: { rng: a.rng, segs: a.segs }, replay: { rng: b.rng, segs: b.segs } };
+      },
       simulate: (seconds, opts) => {   // dev/test time injection — logged so replay stays truthful
         if (VIEWER) return;
         const off = !!(opts && opts.offline);

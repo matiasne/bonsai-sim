@@ -803,6 +803,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   })();
   check(reload2.segs === postReload.segs && reload2.water === postReload.water,
     `replaying the log twice is idempotent (${reload2.segs} segs, water ${reload2.water})`);
+  const vr = await page.evaluate(() => __bonsai.verifyReplay());
+  check(vr.ok === true, `verifyReplay: live state ≡ replay(envelope)${vr.ok ? '' : ' — diffs: ' + vr.diffs.join(',')}`);
 
   // --- DNA share link: a second page replays the exact tree, read-only
   const dnaCode = await page.evaluate(() => __bonsai.dnaCode());
