@@ -455,7 +455,10 @@
       } else if (mode === 'view') {
         if (s && s.target === 'leaf') drag = { type: 'maybeTap', action: 'mist', start };
         else if (!s) drag = { type: 'maybeTap', action: 'water', start };   // pour from above
-        else if (s && (s.target === 'wood' || s.target === 'wire') && !previewTree) {
+        else if (s && s.target === 'wire' && !previewTree) {
+          // grab a placed wire: bend its branch right away (tap still opens the menu)
+          drag = { type: 'bend', segId: s.segId, lastX: e.clientX, lastY: e.clientY, moved: 0, fromView: true };
+        } else if (s && s.target === 'wood' && !previewTree) {
           drag = { type: 'maybeBranch', segId: s.segId, start };            // tap → ✂️/➰ menu
         } else if (s && s.target === 'sand') {
           drag = { type: 'rake', last: sandHit(e.clientX, e.clientY), moved: 0 };
@@ -567,7 +570,10 @@
         save();
       }
       else if (drag.type === 'rotate' && (drag.moved || 0) < 6 && drag.tap === 'pebble' && mode === 'view') doFeed();
-      else if (drag.type === 'bend' && drag.moved < 3) toast('➰ drag the branch to bend it');
+      else if (drag.type === 'bend' && drag.moved < 3) {
+        if (drag.fromView) openBranchMenu(drag.segId, e.clientX, e.clientY);   // tap on coil → menu (unwire lives there)
+        else toast('➰ drag the branch to bend it');
+      }
       else if (drag.type === 'bend') save();
       drag = null;
     };

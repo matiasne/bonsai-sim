@@ -230,6 +230,41 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     }
   }
 
+  // --- grab a placed wire in view mode: dragging the coil bends the branch directly
+  if (bt2) {
+    const coilPt = await page.evaluate((id) => {
+      const v = document.querySelector('#view');
+      const r = v.getBoundingClientRect();
+      const s = __bonsai.tree.segs.get(id);
+      if (!s || !s.wired) return null;
+      const mid = [(s.start[0] + s.end[0]) / 2, (s.start[1] + s.end[1]) / 2, (s.start[2] + s.end[2]) / 2];
+      const p = __bonsai.project(mid);
+      const bx = r.left + (p.x / v.width) * r.width, by = r.top + (p.y / v.height) * r.height;
+      for (let oy = -14; oy <= 14; oy += 2) {
+        for (let ox = -14; ox <= 14; ox += 2) {
+          const hit = __bonsai.sceneAt(bx + ox, by + oy);
+          if (hit && hit.target === 'wire' && hit.segId === id) return { x: bx + ox, y: by + oy };
+        }
+      }
+      return null;
+    }, bt2.id);
+    check(!!coilPt, 'found the placed wire coil to grab');
+    if (coilPt) {
+      const dir0 = await page.evaluate((id) => __bonsai.tree.segs.get(id).dir.slice(), bt2.id);
+      await page.mouse.move(coilPt.x, coilPt.y);
+      await sleep(250);
+      const coilHover = await page.evaluate(() => document.querySelector('#view').dataset.hover);
+      check(coilHover === 'wire', 'hovering the coil shows the wire handle cursor');
+      await page.mouse.down();
+      await page.mouse.move(coilPt.x, coilPt.y - 28, { steps: 8 });
+      await page.mouse.up();
+      await sleep(250);
+      const afterCoil = await page.evaluate((id) => ({ dir: __bonsai.tree.segs.get(id).dir.slice(), mode: __bonsai.mode }), bt2.id);
+      const movedDir = Math.abs(afterCoil.dir[0] - dir0[0]) + Math.abs(afterCoil.dir[1] - dir0[1]) + Math.abs(afterCoil.dir[2] - dir0[2]) > 0.01;
+      check(movedDir && afterCoil.mode === 'view', 'dragging the coil bent the branch without leaving view mode');
+    }
+  }
+
   // --- prune tool: cursor + click a blossom tip
   await page.click('#btn-prune');
   const pruneCursor = await page.evaluate(() => getComputedStyle(document.querySelector('#view')).cursor);
