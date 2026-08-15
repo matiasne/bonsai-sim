@@ -210,6 +210,17 @@ ok(envDay.growth > 0 && envDay.growth <= 1.5, `day growth factor ${envDay.growth
 ok(envNight.night === true && envNight.growth < envDay.growth, 'night slows growth');
 ok(envDay.dryMul > 0 && envDay.mistMul > 0 && envDay.sway > 0, 'drain/sway factors positive');
 ok(envDay.wireRate >= 0.9 && envDay.wireRate <= 1.1, `seasonal wire rate within ±10% (${envDay.wireRate.toFixed(2)})`);
+ok(['spring', 'summer', 'autumn', 'winter'].includes(envDay.season), `season computed (${envDay.season})`);
+ok(typeof envDay.bloom === 'boolean' && envDay.seasonGrowth >= 0.05 && envDay.seasonGrowth <= 1.3,
+  `bloom flag + season growth factor sane (${envDay.seasonGrowth})`);
+B.Weather.forceSeason = { season: 'winter', bloom: false };
+const envWinter = B.Weather.env(new Date(2026, 5, 10, 13, 0));
+ok(envWinter.season === 'winter' && envWinter.seasonGrowth <= 0.1, 'winter dormancy nearly stops growth');
+B.Weather.forceSeason = { season: 'spring', bloom: true };
+const envBloom = B.Weather.env(new Date(2026, 5, 10, 13, 0));
+ok(envBloom.bloom === true && envBloom.seasonGrowth > 1, 'spring bloom + flush via the override');
+B.Weather.forceSeason = null;
+ok(B.Voxels.PAL.leafGreen.length === 4 && B.Voxels.PAL.leafAutumn.length === 4, 'seasonal foliage palettes present');
 ok(typeof envDay.emoji === 'string', 'weather emoji present');
 
 console.log(`\nPASS — ${passed} checks. Tree: ${t.segs.size} segs, height ${t.stats().height.toFixed(1)}, ${t.stats().blossoms} blossoms, ${built.voxels.length} voxels.`);

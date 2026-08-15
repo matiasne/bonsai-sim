@@ -270,7 +270,11 @@
     if (o.kind === 'wire') return PAL.wire[o.ci];
     if (o.kind === 'leaf') {
       if (frost && o.ci === 0) return PAL.leafFrostTop;
-      return (tier === 'dull' ? PAL.leafDull : PAL.leaf)[o.ci];
+      const pal = tier === 'dull' ? PAL.leafDull
+        : tier === 'green' ? PAL.leafGreen
+        : tier === 'autumn' ? PAL.leafAutumn
+        : PAL.leaf;
+      return pal[o.ci];
     }
     if (o.kind === 'pebble') return (wet ? PAL.pebbleWet : PAL.pebble)[o.ci];
     return PAL.pot[o.ci];
@@ -297,9 +301,22 @@
     return s;
   }
 
+  let lastTier = 'pink';
+  function foliageTier() {
+    if (previewTree) return 'pink';                    // visions bloom eternally
+    if (res.health < 25) return 'bare';
+    if (res.health < 55) return 'dull';
+    const season = lastEnv ? lastEnv.season : 'spring';
+    if (season === 'winter') return 'bare';            // deciduous: bare in dormancy
+    if (lastEnv && lastEnv.bloom) return 'pink';       // ~3 weeks of hanami
+    if (season === 'autumn') return 'autumn';
+    return 'green';
+  }
+
   function syncTree(force) {
     const rt = previewTree || tree;                              // 🔮 vision renders instead
-    const tier = previewTree ? 'pink' : res.health < 25 ? 'bare' : res.health < 55 ? 'dull' : 'pink';
+    const tier = foliageTier();
+    lastTier = tier;
     const frost = !previewTree && !!(lastEnv && (lastEnv.frost || lastEnv.snowing));
     const puffScale = mode === 'wire' ? 0.6 : 1;
     const key = [rt.rev, previewYears, Math.round(leafSum(rt) * 2), puffScale, tier, frost ? 1 : 0].join('|');
@@ -990,7 +1007,7 @@
     if (env.raining) mistIn += dtH * 10;
     if (env.kind === 'fog') mistIn += dtH * 8;
     res.mist = clamp(res.mist - dtH * (100 / 14) * env.mistMul + mistIn, 0, 100);
-    res.food = clamp(res.food - dtH * (100 / 110), 0, 130);
+    res.food = clamp(res.food - dtH * (100 / 110) * (env.season === 'winter' ? 0.25 : 1), 0, 130);
     if (env.raining && !off && sandCtx) {       // rain slowly smooths the raked sand
       sandFade += dtH;
       if (sandFade > 0.03) {
@@ -1015,7 +1032,7 @@
     const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
     trimBoost *= Math.pow(0.98, dtH);                       // the opened crown closes again
     const tb = 1 + Math.min(0.18, trimBoost * 0.012);       // light reaches the interior
-    gp += 7 * dtH * env.growth * hf * ff * tb * juv * (off ? 0.5 : 1);
+    gp += 1.4 * dtH * env.growth * hf * ff * tb * juv * (off ? 0.5 : 1);   // ~real-life/5 pace
     tree.ageTips(dtH * env.growth * hf * 1.2);
     const nowSet = tree.ageWires(dtH, env.wireRate);
     if (nowSet.length && opts && opts.fx) {
@@ -1171,13 +1188,21 @@
     if (env && env.snowing && fxRng.next() < 0.5) {
       addPart({ kind: 'snow', x: fxRng.next() * BUFW, y: -3, vx: 0, vy: 14 + fxRng.next() * 8, ttl: 14, t: 0, c: '#ffffff', w: 2, h: 2, drift: fxRng.next() * 6.3 });
     }
-    if (env && res.health > 60 && canopy && fxRng.next() < 0.006 + env.wind * 0.0006) {
-      const c = canopyScreen();
-      addPart({
-        kind: 'petal', x: c.x + (fxRng.next() - 0.5) * c.w, y: c.y + (fxRng.next() - 0.5) * c.h,
-        vx: env.wind * 0.15 * (fxRng.next() < 0.3 ? -1 : 1), vy: 10 + fxRng.next() * 8,
-        ttl: 8, t: 0, c: pick([PAL.leaf[1], PAL.leaf[2]]), w: 2, h: 1, drift: fxRng.next() * 6.3,
-      });
+    if (env && res.health > 60 && canopy && lastTier !== 'bare') {
+      const shedRate = lastTier === 'pink' && env.bloom ? 0.02
+        : lastTier === 'autumn' ? 0.016
+        : 0.005;
+      if (fxRng.next() < shedRate + env.wind * 0.0006) {
+        const c = canopyScreen();
+        const cols = lastTier === 'autumn' ? [PAL.leafAutumn[1], PAL.leafAutumn[2]]
+          : lastTier === 'green' ? [PAL.leafGreen[1], PAL.leafGreen[2]]
+          : [PAL.leaf[1], PAL.leaf[2]];
+        addPart({
+          kind: 'petal', x: c.x + (fxRng.next() - 0.5) * c.w, y: c.y + (fxRng.next() - 0.5) * c.h,
+          vx: env.wind * 0.15 * (fxRng.next() < 0.3 ? -1 : 1), vy: 10 + fxRng.next() * 8,
+          ttl: 8, t: 0, c: pick(cols), w: 2, h: 1, drift: fxRng.next() * 6.3,
+        });
+      }
     }
 
     for (let i = parts.length - 1; i >= 0; i--) {
@@ -1203,7 +1228,7 @@
         parts.splice(i, 1);
         if (fxRng.next() < 0.35) {
           const spot = B.Voxels.pebbleSpot(() => fxRng.next());
-          decals.push({ u: spot.u, v: spot.v, type: 'petal', ts: Date.now() });
+          decals.push({ u: spot.u, v: spot.v, type: 'petal', ts: Date.now(), c: p.c });
           decals = decals.slice(-48);
           decalsDirty = true;
         }
@@ -1436,7 +1461,7 @@
     if (burnUntil > Date.now()) return '🔥 burnt roots — let the fertilizer fade';
     if (soggy > 30) return '🫧 soggy roots — ease off the watering';
     if (res.mist < 15) return '🌫 dry air — a misting would be lovely';
-    if (res.food < 10) return '🧪 hungry — a little fertilizer?';
+    if (res.food < 10 && (!lastEnv || lastEnv.season !== 'winter')) return '🧪 hungry — a little fertilizer?';
     if (statsCache && statsCache.tips >= 20) return '✂️ getting bushy — pruning helps it bloom';
     if (statsCache && statsCache.blossoms >= 14 && trimBoost < 2) return '🍃 dense crown — a trim lets light inside';
     let wireLeft = Infinity, anySet = false;
@@ -1486,7 +1511,10 @@
     const stage = s.segments < 20 ? 'Sapling' : s.segments < 45 ? 'Young' : s.segments < 80 ? 'Shaped' : s.segments < 120 ? 'Mature' : 'Ancient';
     $('#fact-stage').textContent = `${stage} bonsai`;
     $('#fact-age').textContent = `age ${Math.floor(s.ageHours / 24)}d · ${s.segments} segs`;
-    $('#fact-bloom').textContent = `🌸 ${s.blossoms}`;
+    const winterNow = lastEnv && lastEnv.season === 'winter';
+    const padEmoji = winterNow || (lastEnv && lastEnv.season === 'autumn') ? '🍂'
+      : lastEnv && !lastEnv.bloom ? '🍃' : '🌸';
+    $('#fact-bloom').textContent = `${padEmoji} ${winterNow ? 0 : s.blossoms}`;
   }
 
   function updateAll() {
@@ -1587,6 +1615,7 @@
       get mode() { return mode; },
       get zoom() { return zoom; },
       get pix() { return { idx: resIdx, bufW: BUFW, bufH: BUFH }; },
+      get foliage() { return lastTier; },
       get panY() { return panY; },
       get theta() { return theta; },
       get preview() { return previewTree ? previewYears : 0; },

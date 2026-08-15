@@ -14,8 +14,10 @@
 
   const PAL = {
     trunk: ['#8a684a', '#66492f', '#4c3524', '#372218'],
-    leaf: ['#f7c9d6', '#f1a7bf', '#e287a6', '#c9688e'],
-    leafDull: ['#d9c3a8', '#c4a98a', '#a98d6f', '#8a7057'],
+    leaf: ['#f7c9d6', '#f1a7bf', '#e287a6', '#c9688e'],       // spring bloom
+    leafGreen: ['#9fce7d', '#7ab35e', '#5c9646', '#41762f'],  // summer foliage
+    leafAutumn: ['#f2b06a', '#e08a4a', '#c26436', '#94492a'], // autumn color
+    leafDull: ['#d9c3a8', '#c4a98a', '#a98d6f', '#8a7057'],   // neglect
     leafFrostTop: '#eef3f7',
     pot: ['#7fa3bd', '#31465c', '#263a4d', '#17242f'],
     pebble: ['#f2efe6', '#dedacb', '#c4bfae'],
@@ -251,7 +253,7 @@
       const ageH = (nowMs - d.ts) / 3.6e6;
       if (d.type === 'petal') {
         if (ageH > 36) continue;
-        out.push({ x: d.u, y: GEO.potTopY + 1.25, z: d.v, s: 0.9, sy: 0.35, color: PAL.decalPetal });
+        out.push({ x: d.u, y: GEO.potTopY + 1.25, z: d.v, s: 0.9, sy: 0.35, color: d.c || PAL.decalPetal });
       } else {
         if (ageH > 12) continue;
         out.push({ x: d.u, y: GEO.potTopY + 1.25, z: d.v, s: 0.9, sy: 0.5, color: ageH > 6 ? PAL.decalPelletOld : PAL.decalPellet });

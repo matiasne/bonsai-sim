@@ -61,6 +61,14 @@ after wiring, drag the branch to bend, then tap empty space to put the tool away
 Notes: each wallpaper app has its own browser storage, so the wallpaper keeps **its own bonsai**
 (separate from your browser's). Everything works offline except the first three.js load and weather.
 
+## Real seasons 🌸🍃🍂❄
+
+The tree follows the **real seasonal cycle** of your hemisphere: ~3 weeks of pink bloom in early
+spring, green foliage through summer, orange autumn color, and a bare, dormant winter (growth
+nearly stops — like a real deciduous sakura). Growth pace is tuned near real life (~5× faster):
+a recognizable silhouette takes about a month and a half; girth and density keep refining for
+a year and beyond. Fertilizer barely depletes in winter, and wires set faster in the growing season.
+
 ## Real time & weather
 
 - Location: silent IP lookup → or search your city → or 📍 precise geolocation.

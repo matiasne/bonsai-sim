@@ -41,6 +41,7 @@
     },
     _timer: null,
     onUpdate: null,
+    forceSeason: null,   // { season, bloom } — tests/debug override
 
     hydrate(saved) {
       if (saved && typeof saved === 'object') Object.assign(this.st, saved);
@@ -174,15 +175,33 @@
       else if (hot) note = '🔥 heat wave — the soil dries fast';
       else if (st.wind >= 25) note = '💨 strong wind — hold on, little tree';
 
-      // wired branches set a bit faster in the local growing season (hemisphere-aware)
+      // real seasonal cycle, hemisphere-aware (southern lat = half-year shift)
       const doy = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
-      const summerPeak = st.lat !== null && st.lat < 0 ? 355 : 172;
-      const wireRate = st.lat === null ? 1 : 1 + 0.1 * Math.cos(((doy - summerPeak) / 365) * Math.PI * 2);
+      const south = st.lat !== null && st.lat < 0;
+      const sdoy = (doy + (south ? 182 : 0)) % 365;   // northern-equivalent day of year
+      let season, seasonT;
+      if (sdoy >= 59 && sdoy < 151) { season = 'spring'; seasonT = (sdoy - 59) / 92; }
+      else if (sdoy >= 151 && sdoy < 243) { season = 'summer'; seasonT = (sdoy - 151) / 92; }
+      else if (sdoy >= 243 && sdoy < 334) { season = 'autumn'; seasonT = (sdoy - 243) / 91; }
+      else { season = 'winter'; seasonT = (sdoy >= 334 ? sdoy - 334 : sdoy + 31) / 90; }
+      let bloom = season === 'spring' && sdoy - 59 < 21;   // sakura: ~3 weeks a year
+      if (this.forceSeason) {
+        season = this.forceSeason.season;
+        bloom = !!this.forceSeason.bloom;
+        seasonT = 0.5;
+      }
+      const seasonGrowth = { spring: 1.25, summer: 1.0, autumn: 0.5, winter: 0.06 }[season];
+      growth *= seasonGrowth;
+      const wireRate = { spring: 1.1, summer: 1.1, autumn: 1.0, winter: 0.9 }[season];
+
+      if (!note && season === 'winter') note = '❄ winter dormancy — the tree rests until spring';
+      if (bloom) note = '🌸 hanami — the tree is in bloom!';
 
       return {
         emoji: d.emoji, label: d.label, kind: d.kind,
         night, frost, hot, raining, snowing: d.kind === 'snow',
         growth, dryMul, mistMul, rainWater, sway, wireRate,
+        season, seasonT, bloom, seasonGrowth,
         wind: st.ok ? st.wind : 5, temp: st.temp, city: st.city, ok: st.ok, note,
       };
     },

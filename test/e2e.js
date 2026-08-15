@@ -30,7 +30,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   await page.goto(URL + '#ff=48', { waitUntil: 'load' });
   await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
-  await sleep(1200);
+  // pin the season so the suite behaves the same in any real month
+  await page.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
+  await sleep(1600);
 
   const t0 = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: __bonsai.res.water, blossoms: __bonsai.tree.stats().blossoms }));
   check(t0.segs > 8, `48h fast-forward grew the tree (${t0.segs} segs, ${t0.blossoms} blossoms)`);
@@ -697,6 +699,20 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.click('#btn-res');   // back to 1× for the rest of the suite
   await sleep(250);
 
+  // --- four seasons (via the override)
+  await page.evaluate(() => { __bonsai.res.health = 80; });
+  const setSeason = async (season, bloom) => {
+    await page.evaluate((s, b) => { __bonsai.weather.forceSeason = { season: s, bloom: b }; }, season, bloom);
+    await sleep(1600);
+    return page.evaluate(() => __bonsai.foliage);
+  };
+  check((await setSeason('summer', false)) === 'green', 'summer foliage turns green');
+  check((await setSeason('autumn', false)) === 'autumn', 'autumn foliage turns orange');
+  const winterTier = await setSeason('winter', false);
+  const winterPad = await findBlossom();
+  check(winterTier === 'bare' && !winterPad, 'winter: deciduous — the tree stands bare');
+  check((await setSeason('spring', true)) === 'pink', 'spring bloom brings the pink back');
+
   // --- future preview
   const nowSegs = await page.evaluate(() => __bonsai.tree.segs.size);
   await page.click('#btn-future');
@@ -730,6 +746,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const preReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum() }));
   await page.goto(URL, { waitUntil: 'load' });
   await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+  await page.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
   await sleep(800);
   const postReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum() }));
   check(postReload.segs === preReload.segs, `reload restored the tree (${postReload.segs} segs)`);
@@ -742,6 +759,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   wp.on('pageerror', e => errors.push('wallpaper pageerror: ' + e.message));
   await wp.goto(URL + '#wallpaper', { waitUntil: 'load' });
   await wp.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+  await wp.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
   await sleep(800);
   const wpState = await wp.evaluate(() => ({
     cls: document.documentElement.classList.contains('wallpaper'),
