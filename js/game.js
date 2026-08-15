@@ -12,6 +12,7 @@
   let aspect = 1;
   const RES_SCALES = [1, 1.5, 2];   // pixel-density steps for the ▦ button
   let resIdx = 0;
+  let savedPix = 2;                 // the page's stored density choice — wallpaper mode is pinned to 2× but must not clobber it (file:// hosts can share localStorage)
   const HALF = 44;                  // ortho half-HEIGHT in world units → 2 buffer px per voxel
   const LOOK_Y = 31;
   const ELEV = 0.165;               // camera elevation (rad)
@@ -368,7 +369,7 @@
   let ray = null;
 
   // Wallpaper mode: the backbuffer width tracks the screen's aspect so the scene
-  // fills any monitor without distortion (height stays 176 → same pixel scale).
+  // fills any monitor without distortion (height stays density × 176 → same pixel scale).
   function applyViewport() {
     if (!WALLPAPER) return;
     aspect = Math.min(3.4, Math.max(0.5, window.innerWidth / Math.max(1, window.innerHeight)));
@@ -1113,7 +1114,7 @@
     store.set(KEY, JSON.stringify({
       v: 1, ts: Date.now(),
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
-      pan: Math.round(panY * 100) / 100, pix2: resIdx,
+      pan: Math.round(panY * 100) / 100, pix2: WALLPAPER ? savedPix : resIdx,
       gp, burnUntil, soggy, trim: Math.round(trimBoost * 100) / 100,
       dying: Math.round(dyingH * 10) / 10,
       decals: decals.slice(-48),
@@ -1654,7 +1655,8 @@
     }
     applyZoom(data && typeof data.zoom === 'number' ? data.zoom : 1);
     applyPan(data && typeof data.pan === 'number' ? data.pan : 0);
-    applyRes(data && typeof data.pix2 === 'number' ? data.pix2 : 2);
+    savedPix = data && typeof data.pix2 === 'number' ? data.pix2 : 2;
+    applyRes(WALLPAPER ? 2 : savedPix);   // the wallpaper always renders fine — there's no ▦ button to fix a coarse save
 
     window.__bonsai = {
       tree, res, simulate, setPreview, toggleFuture, applyZoom,
