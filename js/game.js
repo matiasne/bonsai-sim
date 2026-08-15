@@ -1352,9 +1352,8 @@
       if (id !== null) doCut(id);
     };
     $('#bm-trim').onclick = () => {
-      const id = branchMenuSeg;
       closeBranchMenu();
-      if (id !== null) doTrim(id);
+      if (mode !== 'trim') setMode('trim');   // pick up the shears, then choose pads
     };
     $('#bm-wire').onclick = () => {
       const id = branchMenuSeg;

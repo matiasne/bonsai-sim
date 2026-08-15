@@ -136,8 +136,23 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     if (padMenu.open && padMenu.trimVisible) {
       await page.evaluate(() => document.querySelector('#bm-trim').click());
       await sleep(300);
-      const rAfter = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), blossomNow.id);
-      check(rAfter < padMenu.r, `TRIM button pinched the pad (r ${padMenu.r.toFixed(1)} → ${rAfter.toFixed(1)})`);
+      const trimArm = await page.evaluate(() => ({
+        mode: __bonsai.mode,
+        cursor: getComputedStyle(document.querySelector('#view')).cursor,
+      }));
+      check(trimArm.mode === 'trim' && /svg/.test(trimArm.cursor), 'TRIM button arms the trim tool (shears cursor)');
+      const padSel = await findBlossom();
+      if (padSel) {
+        const rB = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), padSel.id);
+        await page.mouse.click(padSel.x, padSel.y);
+        await sleep(300);
+        const rA = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), padSel.id);
+        check(rA < rB, `selected pad was pinched (r ${rB.toFixed(1)} → ${rA.toFixed(1)})`);
+      } else {
+        check(true, 'no pad visible to select — skipped');
+      }
+      await page.keyboard.press('Escape');
+      await sleep(150);
     }
     // the offer must appear even on a weak tree — the click explains instead
     await page.evaluate(() => { __bonsai.res.health = 32; });
@@ -152,8 +167,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         const rW = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), weakTap.id);
         await page.evaluate(() => document.querySelector('#bm-trim').click());
         await sleep(250);
+        await page.mouse.click(weakTap.x, weakTap.y);   // select the pad — the weak tree refuses
+        await sleep(250);
         const rW2 = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), weakTap.id);
         check(Math.abs(rW2 - rW) < 0.01, 'a weak tree politely refuses the pinch');
+        await page.keyboard.press('Escape');
+        await sleep(150);
       }
     } else {
       check(true, 'no pad for the weak-tree check — skipped');
