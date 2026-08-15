@@ -333,6 +333,23 @@
       return true;
     }
 
+    // Pinch/defoliate a blossom pad: it regrows finer, and pinching drives
+    // ramification (denser fine branching) at and around the tip.
+    trimTip(id) {
+      const s = this.segs.get(id);
+      if (!s || s.children.length || s.cut) return { ok: false };
+      const r = this.leafRadius(s);
+      if (r < 2) return { ok: false, reason: 'small' };
+      // aim for ~55% of the CURRENT radius (tipAge can sit far beyond the
+      // radius cap on old pads — a plain fraction wouldn't visibly shrink them)
+      s.tipAge = Math.max(0, (r * 0.55 - 1.2) / 0.11);
+      s.budBoost += 1.5;
+      const p = this.segs.get(s.pid);
+      if (p) p.budBoost += 0.8;
+      this.rev++;
+      return { ok: true, at: s.end.slice() };
+    }
+
     wire(id, on) {
       const s = this.segs.get(id);
       if (!s || s.pid === null || s.cut) return null;

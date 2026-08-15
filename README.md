@@ -31,6 +31,7 @@ npx serve .        # or: python3 -m http.server
 | 🌫 **MIST** | leaf humidity — nice-to-have, the tree loves it (shortcut: **tap the blossoms**) |
 | 🧪 **FEED** | fertilizer speeds growth; overfeeding burns the roots (shortcut: **tap the pebbles**) |
 | ✂️ **PRUNE** | click a branch/blossom to cut it — it buds back **denser** (real bonsai behavior) |
+| 🍃 **TRIM** | pinch blossom pads (defoliation): they regrow **smaller and finer**, ramification densifies, and the opened crown catches light — a short growth boost, at a small vigor cost |
 | ➰ **WIRE** | click a branch to wire it, **drag to bend** — releasing the bend puts the tool away; from then on **grab the copper coil to re-bend anytime** (tap the coil → menu → unwire). The wire must stay on **1–3 months** for the shape to hold (thin shoots set fastest, thick branches slowest, growing season helps), and **removal is always manual** — unwire after setting and the shape is kept; unwire early (after a warning) and the branch **springs back** proportionally |
 | ⏩ | time-lapse one hour |
 | ⚙ | set your city (weather), start a new tree |

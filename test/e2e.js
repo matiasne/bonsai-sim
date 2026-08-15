@@ -241,6 +241,41 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     }
   }
 
+  // --- trim tool: pinch a blossom pad → smaller pad, ramification boost, no mist
+  await page.click('#btn-trim');
+  await sleep(150);
+  const trimCursor = await page.evaluate(() => getComputedStyle(document.querySelector('#view')).cursor);
+  check(/svg/.test(trimCursor), 'trim mode shows the pinching-shears cursor');
+  const trimTarget = await page.evaluate(() => {
+    const t = __bonsai.tree;
+    const r = document.querySelector('#view').getBoundingClientRect();
+    for (const s of t.segs.values()) {
+      if (s.children.length || s.cut || t.leafRadius(s) < 2.5) continue;
+      const p = __bonsai.project(s.end);
+      const cx = r.left + (p.x / 176) * r.width, cy = r.top + (p.y / 176) * r.height;
+      const hit = __bonsai.pick(cx, cy);
+      if (hit && hit.kind === 'leaf' && hit.segId === s.id) {
+        return { x: cx, y: cy, id: s.id, r: t.leafRadius(s), bb: s.budBoost };
+      }
+    }
+    return null;
+  });
+  check(!!trimTarget, 'found a full pad to pinch');
+  if (trimTarget) {
+    const mistPre = await page.evaluate(() => __bonsai.res.mist);
+    await page.mouse.click(trimTarget.x, trimTarget.y);
+    await sleep(300);
+    const trimmed = await page.evaluate((id) => {
+      const s = __bonsai.tree.segs.get(id);
+      return { r: __bonsai.tree.leafRadius(s), bb: s.budBoost, mist: __bonsai.res.mist };
+    }, trimTarget.id);
+    check(trimmed.r < trimTarget.r && trimmed.bb > trimTarget.bb,
+      `pinch shrank the pad (r ${trimTarget.r.toFixed(1)} → ${trimmed.r.toFixed(1)}) and boosted ramification`);
+    check(trimmed.mist === mistPre, 'pinching did not trigger a mist');
+  }
+  await page.keyboard.press('Escape');
+  await sleep(150);
+
   // --- grab a placed wire in view mode: dragging the coil bends the branch directly
   if (bt2) {
     const coilPt = await page.evaluate((id) => {
@@ -281,6 +316,25 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       check(movedDir && modeAfterCoil === 'view', 'dragging the coil bent the branch without leaving view mode');
 
       // tap the coil → UNWIRE → warning (not set yet) → confirm → the branch springs back
+      const readSpring = (id) => page.evaluate((sid) => {
+        const s = __bonsai.tree.segs.get(sid);
+        const n = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
+        const a = n(s.dir), b = n(s.dir0);
+        return {
+          dir0: s.dir0.slice(),
+          angle: Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))),
+        };
+      }, id);
+      let spring0 = await readSpring(bt2.id);
+      if (spring0.angle < 0.06) {   // ensure a meaningful bend so the warning path triggers
+        await page.evaluate((id) => {
+          __bonsai.tree.bend(id, [0, 0, 1], 0.18);
+          __bonsai.tree.bend(id, [1, 0, 0], 0.18);
+        }, bt2.id);
+        await sleep(200);
+        spring0 = await readSpring(bt2.id);
+      }
+      // find the coil AFTER any bending — the branch moves with it
       const coil2 = await page.evaluate((id) => {
         const v = document.querySelector('#view');
         const r = v.getBoundingClientRect();
@@ -298,30 +352,17 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         return null;
       }, bt2.id);
       check(!!coil2, 'found the coil again after bending');
+      let coilMenuOpen = false;
       if (coil2) {
-        const readSpring = (id) => page.evaluate((sid) => {
-          const s = __bonsai.tree.segs.get(sid);
-          const n = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
-          const a = n(s.dir), b = n(s.dir0);
-          return {
-            dir0: s.dir0.slice(),
-            angle: Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))),
-          };
-        }, id);
-        let spring0 = await readSpring(bt2.id);
-        if (spring0.angle < 0.06) {   // ensure a meaningful bend so the warning path triggers
-          await page.evaluate((id) => {
-            __bonsai.tree.bend(id, [0, 0, 1], 0.18);
-            __bonsai.tree.bend(id, [1, 0, 0], 0.18);
-          }, bt2.id);
-          await sleep(200);
-          spring0 = await readSpring(bt2.id);
-        }
         await page.mouse.click(coil2.x, coil2.y);
         await sleep(250);
+        coilMenuOpen = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+      }
+      check(coilMenuOpen, 'coil tap opens the menu');
+      if (coilMenuOpen) {
         const unwireLabel = await page.evaluate(() => document.querySelector('#bm-wire').textContent);
-        check(/UNWIRE/.test(unwireLabel), 'coil tap opens the menu offering UNWIRE');
-        await page.click('#bm-wire');
+        check(/UNWIRE/.test(unwireLabel), 'menu offers UNWIRE for the wired branch');
+        await page.evaluate(() => document.querySelector('#bm-wire').click());
         await sleep(250);
         const confirmBtn = await page.evaluate(() => {
           const b = document.querySelector('.toast button');

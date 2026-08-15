@@ -88,6 +88,7 @@
   let previewTree = null, previewYears = 0, futureBarOpen = false;
   const previewCache = new Map();
   let gp = 0, burnUntil = 0, soggy = 0;
+  let trimBoost = 0;  // recent pinching lets light into the crown → growth buff
   let decals = [], decalsDirty = true;
   let springs = [];   // branches easing back after an early unwire
   let lastEnv = null, statsCache = null;
@@ -465,6 +466,9 @@
       if (mode === 'prune') {
         const hit = pickAt(e.clientX, e.clientY);
         if (hit) { drag = { type: 'maybePrune', hit, start }; return; }
+      } else if (mode === 'trim') {
+        const hit = pickAt(e.clientX, e.clientY);
+        if (hit) { drag = { type: 'maybeTrim', hit, start }; return; }
       } else if (mode === 'wire') {
         const hit = pickAt(e.clientX, e.clientY);
         if (hit) {
@@ -528,7 +532,7 @@
         }
         return;
       }
-      if (drag.type === 'maybePrune' || drag.type === 'maybeTap' || drag.type === 'maybeBranch') {
+      if (drag.type === 'maybePrune' || drag.type === 'maybeTrim' || drag.type === 'maybeTap' || drag.type === 'maybeBranch') {
         if (Math.hypot(e.clientX - drag.start.x, e.clientY - drag.start.y) > 6) drag = null;
         return;
       }
@@ -596,6 +600,10 @@
       if (!drag) return;
       if (drag.type === 'pinch') { if (touches.size < 2) drag = null; return; }
       if (drag.type === 'maybePrune' && drag.hit) doCut(drag.hit.segId);
+      else if (drag.type === 'maybeTrim' && drag.hit) {
+        if (drag.hit.kind === 'leaf') doTrim(drag.hit.segId);
+        else toast('🍃 aim for the blossom pads');
+      }
       else if (drag.type === 'maybeTap') (drag.action === 'mist' ? doMist : doWater)();
       else if (drag.type === 'maybeBranch') openBranchMenu(drag.segId, e.clientX, e.clientY);
       else if (drag.type === 'rake') {
@@ -817,6 +825,29 @@
     feedFX(); updateAll(); save();
   }
 
+  // Pinch a blossom pad: it regrows finer, ramifies denser, and the opened
+  // crown catches more light (a temporary growth boost). Costs a little vigor.
+  function doTrim(segId) {
+    if (res.health < 40) { toast('🍃 the tree is too stressed to trim right now'); return; }
+    const r = tree.trimTip(segId);
+    if (!r.ok) {
+      if (r.reason === 'small') toast('🍃 that pad is already tender');
+      return;
+    }
+    trimBoost = Math.min(20, trimBoost + 1);
+    res.health = Math.max(30, res.health - 1);
+    const p = projectTreePt(r.at);
+    for (let i = 0; i < 7; i++) {
+      addPart({
+        kind: 'petal', x: p.x + (fxRng.next() - 0.5) * 6, y: p.y + (fxRng.next() - 0.5) * 4,
+        vx: (fxRng.next() - 0.5) * 12, vy: 14 + fxRng.next() * 10, ttl: 3, t: 0,
+        c: pick([PAL.leaf[1], PAL.leaf[2], '#9ec98b']), w: 2, h: 1, drift: fxRng.next() * 6.3,
+      });
+    }
+    toast(pick(['🍃 snip — finer shoots will come', '🍃 pinched — light reaches the crown', '🍃 trimmed — denser pads ahead']));
+    updateAll(); save();
+  }
+
   function setMode(m) {
     if (previewTree && m !== 'view') { guardPreview(); return; }
     mode = (mode === m) ? 'view' : m;
@@ -825,6 +856,7 @@
     closeBranchMenu();
     $('#btn-prune').classList.toggle('active', mode === 'prune');
     $('#btn-wire').classList.toggle('active', mode === 'wire');
+    $('#btn-trim').classList.toggle('active', mode === 'trim');
     updateStatus();
   }
 
@@ -843,7 +875,7 @@
     sandTexture.needsUpdate = true;
     tree = new B.TreeModel();
     Object.assign(res, { water: 72, mist: 60, food: 55, health: 82 });
-    gp = 0; burnUntil = 0; soggy = 0; decals = []; decalsDirty = true; treeKey = ''; springs = [];
+    gp = 0; burnUntil = 0; soggy = 0; trimBoost = 0; decals = []; decalsDirty = true; treeKey = ''; springs = [];
     window.__bonsai.tree = tree;
     toast('🌱 a brand-new bonsai arrives!');
     updateAll(); save();
@@ -898,7 +930,9 @@
     const juv = segs < 26 ? 4.5 : segs < 60 ? 2 : 1;
     const hf = res.health < 25 ? 0.06 : res.health < 60 ? 0.1 + ((res.health - 25) / 35) * 0.8 : 1;
     const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
-    gp += 7 * dtH * env.growth * hf * ff * juv * (off ? 0.5 : 1);
+    trimBoost *= Math.pow(0.98, dtH);                       // the opened crown closes again
+    const tb = 1 + Math.min(0.18, trimBoost * 0.012);       // light reaches the interior
+    gp += 7 * dtH * env.growth * hf * ff * tb * juv * (off ? 0.5 : 1);
     tree.ageTips(dtH * env.growth * hf * 1.2);
     const nowSet = tree.ageWires(dtH, env.wireRate);
     if (nowSet.length && opts && opts.fx) {
@@ -942,7 +976,7 @@
       v: 1, ts: Date.now(),
       res, theta: Math.round(theta * 1000) / 1000, zoom: Math.round(zoom * 100) / 100,
       pan: Math.round(panY * 100) / 100,
-      gp, burnUntil, soggy,
+      gp, burnUntil, soggy, trim: Math.round(trimBoost * 100) / 100,
       decals: decals.slice(-48),
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
@@ -1202,6 +1236,7 @@
     $('#btn-feed').onclick = doFeed;
     $('#btn-prune').onclick = () => setMode('prune');
     $('#btn-wire').onclick = () => setMode('wire');
+    $('#btn-trim').onclick = () => setMode('trim');
     $('#bm-cut').onclick = () => {
       const id = branchMenuSeg;
       closeBranchMenu();
@@ -1313,6 +1348,7 @@
     if (res.mist < 15) return '🌫 dry air — a misting would be lovely';
     if (res.food < 10) return '🧪 hungry — a little fertilizer?';
     if (statsCache && statsCache.tips >= 20) return '✂️ getting bushy — pruning helps it bloom';
+    if (statsCache && statsCache.blossoms >= 14 && trimBoost < 2) return '🍃 dense crown — a trim lets light inside';
     let wireLeft = Infinity, anySet = false;
     for (const s of tree.segs.values()) {
       if (!s.wired) continue;
@@ -1330,6 +1366,7 @@
     let txt;
     if (previewTree) txt = `🔮 your bonsai after ${previewYears} years of loving care — press NOW to return`;
     else if (mode === 'prune') txt = '✂️ click a branch or blossom to cut — esc to exit';
+    else if (mode === 'trim') txt = '🍃 click a blossom pad to pinch it — esc to exit';
     else if (mode === 'wire') txt = '➰ click a branch, drag to bend · dbl-click unwires · esc exits';
     else txt = careNote() || (lastEnv && lastEnv.note) || 'drag the pot 🌀 · rake the sand · tap: blossoms=mist, air=water, pebbles=feed, branch=✂️➰';
     if (statusEl.textContent !== txt) statusEl.textContent = txt;
@@ -1423,6 +1460,7 @@
       gp = data.gp || 0;
       burnUntil = data.burnUntil || 0;
       soggy = data.soggy || 0;
+      trimBoost = data.trim || 0;
       decals = Array.isArray(data.decals) ? data.decals : [];
       B.Weather.hydrate(data.wx);
     }

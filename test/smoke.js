@@ -100,8 +100,8 @@ ok(t.segs.get(branch.id).dir0[0] === d0keep[0] && t.segs.get(branch.id).dir0[1] 
   'dir0 keeps the pre-bend direction through bends');
 ok(t.wire(branch.id, false) === false, 'unwire works');
 ok(t.segs.get(branch.id).dir0 === null, 'unwire clears dir0');
-ok(t.nudge(branch.id, [0, 0, 1], 0.05) === true, 'nudge rotates without wire (spring-back path)');
-t.nudge(branch.id, [0, 0, 1], -0.05);
+const nudged = t.nudge(branch.id, [0, 0, 1], 0.05) || t.nudge(branch.id, [0, 0, 1], -0.05) || t.nudge(branch.id, [1, 0, 0], 0.05);
+ok(nudged === true, 'nudge rotates without wire (spring-back path; soil veto may block a direction)');
 
 console.log('wire setting (removal is always manual, 1–3 months by thickness)');
 t.wire(branch.id, true);
@@ -124,6 +124,19 @@ ok(B.Voxels.buildTree(t).voxels.some(v => v.kind === 'wire'), 'coils still rende
 t.wire(branch.id, false);
 ok(t.segs.get(branch.id).wired === false && t.segs.get(branch.id).dir0 === null, 'manual removal takes the wire off');
 ok(!B.Voxels.buildTree(t).voxels.some(v => v.kind === 'wire'), 'coils gone after manual removal');
+
+console.log('leaf trimming (pinch/defoliation)');
+const padTip = [...t.segs.values()].find(s => !s.children.length && !s.cut && t.leafRadius(s) >= 2);
+ok(!!padTip, 'found a pad to trim');
+const preR = t.leafRadius(padTip), preBB = padTip.budBoost;
+const trimRes = t.trimTip(padTip.id);
+ok(trimRes.ok === true, 'trim succeeds on a full pad');
+ok(t.leafRadius(padTip) < preR && padTip.budBoost > preBB, 'trim shrinks the pad and boosts ramification');
+const interiorSeg = [...t.segs.values()].find(s => s.children.length);
+ok(t.trimTip(interiorSeg.id).ok === false, 'cannot trim interior segments');
+let overTrim = { ok: true }, trimGuard = 6;
+while (overTrim.ok && trimGuard--) overTrim = t.trimTip(padTip.id);
+ok(overTrim.ok === false && overTrim.reason === 'small', 'a pad can only be trimmed down so far');
 
 console.log('serialize round-trip');
 const s1 = t.serialize();

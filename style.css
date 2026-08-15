@@ -96,6 +96,11 @@ button.chip:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink);
   cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cg%20fill='none'%20stroke-linecap='round'%3E%3Cpath%20d='M6%2022%20L22%206'%20stroke='white'%20stroke-width='7'/%3E%3Cpath%20d='M6%2022%20L22%206'%20stroke='%237b4a2d'%20stroke-width='3.5'/%3E%3Cpath%20d='M8%2015%20l5%205%20M12%2011%20l5%205%20M16%207%20l5%205'%20stroke='white'%20stroke-width='4'/%3E%3Cpath%20d='M8%2015%20l5%205%20M12%2011%20l5%205%20M16%207%20l5%205'%20stroke='%23b0713c'%20stroke-width='2'/%3E%3C/g%3E%3C/svg%3E") 14 14, crosshair;
 }
 
+#view[data-mode="trim"] {
+  /* pinching shears + leaf */
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='28'%20height='28'%3E%3Cg%20stroke-linecap='round'%3E%3Cpath%20d='M10%2025%20Q9%2013%2024%208%20Q23%2021%2013%2025%20Q11%2026%2010%2025%20Z'%20fill='%237cb668'%20stroke='%2322303f'%20stroke-width='1.5'/%3E%3Cpath%20d='M13%2021%20Q16%2015%2022%2011'%20fill='none'%20stroke='%2345602f'%20stroke-width='1'/%3E%3Cpath%20d='M2%202%20L11%2011%20M11%202%20L2%2011'%20stroke='white'%20stroke-width='5'/%3E%3Cpath%20d='M2%202%20L11%2011%20M11%202%20L2%2011'%20stroke='%2322303f'%20stroke-width='2'/%3E%3C/g%3E%3C/svg%3E") 6 6, crosshair;
+}
+
 /* view-mode contextual cursors: the scene advertises its tap actions */
 #view[data-mode="view"][data-hover="leaf"] {
   /* spray bottle, nozzle + mist at the hotspot */
