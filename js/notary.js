@@ -12,7 +12,9 @@
 
   // Notary public keys (spki der, base64url). Rotation appends — old
   // attestations stay verifiable forever. NEVER accept keys from a URL.
-  const PUBKEYS = [];
+  const PUBKEYS = [
+    'MCowBQYDK2VwAyEAo2GzHn8KbiTdod_dcavUpp79-R2c33FW8rDqLRh0Iso',
+  ];
 
   const buildMsg = (hash, ts) => 'pixel-bonsai-notary-v1:' + hash + '.' + ts;
 
