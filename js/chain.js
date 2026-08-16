@@ -7,8 +7,8 @@
   const B = root.Bonsai = root.Bonsai || {};
 
   const CFG = {
-    // BonsaiTree.sol deployment — filled in after `forge script Deploy`.
-    CONTRACT: '',
+    // BonsaiTree.sol on Base Sepolia — see contracts/broadcast/ for the record.
+    CONTRACT: '0x4e8445fb48f375b3315ccf07f2a14E35De6f7C02',
     CHAIN_ID: 84532,
     CHAIN_ID_HEX: '0x14a34',
     CHAIN_PARAMS: {

@@ -30,8 +30,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   await page.goto(URL + '#ff=48', { waitUntil: 'load' });
   await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
-  // pin the season so the suite behaves the same in any real month
-  await page.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
+  // pin the season AND calm weather so the suite behaves the same in any real
+  // month or wind (sway amplitude follows live wind and makes taps drift)
+  const pinWeather = (p) => p.evaluate(() => {
+    __bonsai.weather.forceSeason = { season: 'spring', bloom: true };
+    __bonsai.weather.refresh = async () => {};
+    Object.assign(__bonsai.weather.st, { ok: true, wind: 0, code: 1, temp: 21, precip: 0, isDay: 1 });
+  });
+  await pinWeather(page);
   await sleep(1600);
 
   const t0 = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: __bonsai.res.water, blossoms: __bonsai.tree.stats().blossoms }));
@@ -158,11 +164,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     // the offer must appear even on a weak tree — the click explains instead
     await page.evaluate(() => { __bonsai.res.health = 32; });
     await sleep(400);
-    const weakTap = await findBlossom();
-    if (weakTap) {
+    let weakTap = null, weakMenu = false;
+    for (let att = 0; att < 2 && !weakMenu; att++) {   // taps can miss on canopy drift
+      weakTap = await findBlossom();
+      if (!weakTap) break;
       await page.mouse.click(weakTap.x, weakTap.y);
       await sleep(300);
-      const weakMenu = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+      weakMenu = await page.evaluate(() => !document.querySelector('#branch-menu').classList.contains('hidden'));
+    }
+    if (weakTap) {
       check(weakMenu, 'the TRIM offer appears even on a weak tree');
       if (weakMenu) {
         const rW = await page.evaluate((id) => __bonsai.tree.leafRadius(__bonsai.tree.segs.get(id)), weakTap.id);
@@ -789,7 +799,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const preReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, sand: __bonsai.sandSum() }));
   await page.goto(URL, { waitUntil: 'load' });
   await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
-  await page.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
+  await pinWeather(page);
   await sleep(800);
   const postReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum() }));
   check(postReload.segs === preReload.segs, `reload replayed the same tree (${postReload.segs} segs)`);
@@ -876,7 +886,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   wp0.on('pageerror', e => errors.push('wallpaper pageerror: ' + e.message));
   await wp0.goto(URL + '#wallpaper', { waitUntil: 'load' });
   await wp0.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
-  await wp0.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
+  await pinWeather(wp0);
   await sleep(800);
   const wpState = await wp0.evaluate(() => ({
     cls: document.documentElement.classList.contains('wallpaper'),
@@ -903,7 +913,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   });
   await wp0.reload({ waitUntil: 'load' });
   await wp0.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
-  await wp0.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
+  await pinWeather(wp0);
   await sleep(400);
   const wpCoarse = await wp0.evaluate(() => ({
     bufH: document.querySelector('#view').height,
@@ -929,7 +939,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   wp.on('pageerror', e => errors.push('wallpaper pageerror: ' + e.message));
   await wp.goto(URL + '#wallpaper', { waitUntil: 'load' });
   await wp.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
-  await wp.evaluate(() => { __bonsai.weather.forceSeason = { season: 'spring', bloom: true }; });
+  await pinWeather(wp);
   await sleep(400);
 
   const wpBranch = await wp.evaluate(() => {
