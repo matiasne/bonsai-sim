@@ -853,6 +853,23 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
   await vp.close();
 
+  // --- optional NFT mint: with no wallet extension the button degrades to a
+  // friendly toast and the game stays fully healthy (chain.js loads lazily)
+  await page.evaluate(() => document.querySelector('#btn-settings').click());
+  await sleep(200);
+  check(await page.evaluate(() => !!document.querySelector('#btn-mint')), 'settings offers the optional MINT button');
+  await page.evaluate(() => document.querySelector('#btn-mint').click());
+  await sleep(1500);
+  const mintDegrade = await page.evaluate(() => ({
+    toast: [...document.querySelectorAll('.toast')].some(t => /🪙/.test(t.textContent)),
+    chainLoaded: !!window.Bonsai.Chain,
+    healthy: __bonsai.tree.segs.size > 0 && !document.querySelector('#fatal:not(.hidden)'),
+    ethersLoaded: !!window.ethers,
+  }));
+  check(mintDegrade.toast && mintDegrade.chainLoaded && mintDegrade.healthy,
+    'no-wallet MINT click explains itself and the game stays healthy');
+  await page.evaluate(() => document.querySelector('#modal-settings').classList.add('hidden'));
+
   // --- wallpaper mode: fullscreen widescreen scene, UI hidden, cut & wire usable
   const wp0 = await browser.newPage();
   await wp0.setViewport({ width: 1600, height: 900 });

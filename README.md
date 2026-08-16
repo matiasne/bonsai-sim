@@ -103,12 +103,28 @@ so that a bonsai **is** its history:
   that opens a **read-only viewer** of your exact tree on any machine — it replays your whole
   history in milliseconds and touches nothing locally.
 
-This is also deliberate groundwork for optional on-chain ownership: an NFT would store just the
-envelope (or its hash + event log), and anyone could re-derive and verify the tree. Caveats before
-that leap: replay is bit-identical on the same JS engine but `Math.sin/cos/pow` are not spec-pinned
-across engines (a fixed-point math pass would be needed for trustless verification), and the
-integer event format (`["W",t]`, `["B",t,id,ax,ay,az,a]`, …) maps 1:1 onto a compact binary
-encoding when the time comes.
+## 🪙 Optional NFT — a living token (testnet)
+
+The bonsai can be minted as a **living NFT** on **Base Sepolia** (a free test network):
+
+- **Playing never needs a wallet.** Minting is a strictly optional button (⚙ → 🪙 MINT NFT);
+  the wallet-handling code (`js/chain.js` + ethers from a CDN) loads only if you click it.
+- The token stores the tree's **entire DNA on-chain** — the same envelope a DNA link carries.
+  Its metadata is generated on-chain too, and the `animation_url` opens this site's read-only
+  viewer, so marketplaces (e.g. OpenSea testnet) render the *actual living tree*, not a picture.
+- It's **alive**: after minting, the button becomes ⛓ UPDATE ON-CHAIN — push your tree's latest
+  history whenever you like. Sim-time may never rewind, each tree can only be minted once
+  (`treeId = keccak(seed:genesis)`), and yes: a tree that dies can be immortalized dead.
+- To try it you need the MetaMask extension, a **fresh test account**, and free Base Sepolia ETH
+  from a faucet. The contract lives in [`contracts/`](contracts/) (Foundry + OpenZeppelin,
+  `forge test` covered) — see its README for build/deploy.
+
+**Trust caveats (testnet-honest):** the chain *stores* the envelope, it does not *verify* it —
+anyone can check a tree by replaying its DNA in the open sim, but trustless on-chain verification
+would require fixed-point math: replay is bit-identical on the same JS engine, while
+`Math.sin/cos/pow` are not spec-pinned across engines. The integer event format
+(`["W",t]`, `["B",t,id,ax,ay,az,a]`, …) maps 1:1 onto a compact binary encoding when the time
+comes. `treeId` and `simT` are client-supplied honesty rails, not proofs.
 
 ## Project layout
 
