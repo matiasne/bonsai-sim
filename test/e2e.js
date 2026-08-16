@@ -874,6 +874,18 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     check(forged.badgeHidden && forged.healthy,
       `forged minted claim (&nft=${claim}) shows no badge and the viewer stays healthy`);
   }
+  // notary badge: forged/garbage attestation params must never show the badge
+  const fakeAtt = Buffer.from(JSON.stringify([[Date.now() - 30 * 864e5, 900, 0, 'A'.repeat(86)]])).toString('base64url');
+  for (const [label, param] of [['garbage', 'not-base64!!'], ['bad-signature', fakeAtt]]) {
+    await vp.goto(URL + '#dna=' + dnaCode + '&att=' + param, { waitUntil: 'load' });
+    await vp.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+    await sleep(1500);
+    const att = await vp.evaluate(() => ({
+      hidden: document.querySelector('#fact-notary').classList.contains('hidden'),
+      healthy: __bonsai.tree.segs.size > 0,
+    }));
+    check(att.hidden && att.healthy, `${label} attestation shows no age badge and the viewer stays healthy`);
+  }
   await vp.close();
 
   // --- optional NFT mint: with no wallet extension the button degrades to a
@@ -891,6 +903,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }));
   check(mintDegrade.toast && mintDegrade.chainLoaded && mintDegrade.healthy,
     'no-wallet MINT click explains itself and the game stays healthy');
+  check(await page.evaluate(() => __bonsai.atts.length === 0),
+    'file:// pages never request attestations (protocol gate)');
   await page.evaluate(() => document.querySelector('#modal-settings').classList.add('hidden'));
 
   // --- wallpaper mode: fullscreen widescreen scene, UI hidden, cut & wire usable

@@ -107,6 +107,8 @@
   let S = null;       // deterministic sim state (B.Sim): tree, res, gp, burnH, soggy, trimBoost, dyingH, simT
   let dna = null;     // the envelope {v:2, seed, g, s, t, e, snap?} — S is always replay(dna) + live steps
   let nft = null;     // minted-token record {tokenId, contract, chain, txHash, simT, ts} — save cosmetics, NEVER in the envelope
+  let atts = [];      // notary attestations {ts, simT, n, sig} — provable history age; save cosmetics, NEVER in the envelope
+  let attInFlight = false, attLastTry = 0;
   let tree = null;    // alias of S.tree — rebound on boot/freshTree/log rewind
   let res = null;     // alias of S.res
   let pendingSec = 0; // wall-clock time not yet folded into the sim (sub-quantum remainder)
@@ -909,6 +911,7 @@
           if (dna.e[evIndex] !== ev) return;
           dna.e.splice(evIndex, 1);
           rebuildFromLog();
+          revalidateAtts();
           toast('🌱 phew — branch restored');
           save();
         },
@@ -1075,6 +1078,7 @@
     tree = S.tree; res = S.res;
     pendingSec = 0;
     nft = null;   // a new tree is a new (unminted) identity
+    atts = [];    // …with no notarized history yet
     statsCache = tree.stats();
     decals = []; decalsDirty = true; treeKey = '';
     toast('🌱 a brand-new bonsai arrives!');
@@ -1147,6 +1151,7 @@
     }
     statsCache = tree.stats();
     updateAll();
+    maybeAttest();
     if (now - lastSaveAt > 45000) save();
   }
 
@@ -1166,7 +1171,45 @@
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
       nft: nft || undefined,
+      atts: atts.length ? atts : undefined,
     }));
+  }
+
+  // ---------- timestamp notary (opportunistic — the game never blocks on it)
+  // An attestation proves this exact history prefix existed no later than its
+  // server timestamp. Once a day, silently; failures are invisible.
+  function maybeAttest() {
+    if (VIEWER || attInFlight || !/^https?:$/.test(location.protocol)) return;
+    if (dna.e.length === 0 || S.simT < 86400) return;   // outside the hemisphere re-mint window
+    const now = Date.now();
+    if (atts.length && now - atts[atts.length - 1].ts < 864e5) return;
+    if (now - attLastTry < 600e3) return;
+    attLastTry = now;
+    attInFlight = true;
+    dna.t = S.simT;
+    B.Notary.attest(dna)
+      .then((a) => {
+        if (!a) return;
+        atts.push(a);
+        // cap storage; the FIRST attestation carries the whole age claim
+        while (atts.length > 32) atts.splice(1 + ((atts.length / 2) | 0), 1);
+        save();
+      })
+      .catch(() => {})
+      .finally(() => { attInFlight = false; });
+  }
+
+  // After an undo rewrote the log, attestations covering the spliced region
+  // no longer match any prefix — quietly drop them (older ones survive).
+  function revalidateAtts() {
+    if (!atts.length) return;
+    dna.t = S.simT;
+    Promise.all(atts.map(a => B.Notary.verify(dna, a)))
+      .then((oks) => {
+        const kept = atts.filter((_, i) => oks[i]);
+        if (kept.length !== atts.length) { atts = kept; save(); }
+      })
+      .catch(() => {});
   }
 
   // A v1 save carries stored geometry — wrap it as a genesis snapshot so the
@@ -1510,6 +1553,7 @@
         const code = await SIM.dnaEncode(dna);
         let url = location.href.split('#')[0] + '#dna=' + code;
         if (nft && nft.tokenId) url += '&nft=' + nft.tokenId;   // viewer verifies the claim on-chain
+        if (atts.length) url += '&att=' + B.Notary.encodeAtts(B.Notary.pickShareSubset(atts));   // …and the age proof offline
         await navigator.clipboard.writeText(url);
         toast('🧬 DNA link copied — it opens a read-only view of this exact tree');
       } catch (e) {
@@ -1769,6 +1813,7 @@
       get sim() { return S; },
       get viewer() { return VIEWER; },
       get nft() { return nft; },
+      get atts() { return atts; },
       dna: () => { dna.t = S.simT; return JSON.parse(SIM.canonical(dna)); },
       dnaCode: () => { dna.t = S.simT; return SIM.dnaEncode(dna); },
       verifyReplay: () => {   // replay the envelope and diff it against the live state
@@ -1848,6 +1893,24 @@
     updateAll();
     requestAnimationFrame(frame);
 
+    // If the link carries notary attestations, verify them OFFLINE (WebCrypto
+    // + committed public keys) — any that pass prove the history's age.
+    const attHash = /[#&]att=([^&\s]+)/.exec(location.hash);
+    if (attHash) {
+      try {
+        const shared = B.Notary.decodeAtts(attHash[1]);
+        const oks = await Promise.all(shared.map(a => B.Notary.verify(dna, a)));
+        const verified = shared.filter((_, i) => oks[i]);
+        if (verified.length) {
+          const oldest = verified.reduce((m, a) => a.ts < m.ts ? a : m);
+          const days = Math.max(0, Math.floor((Date.now() - oldest.ts) / 864e5));
+          const el = $('#fact-notary');
+          el.textContent = `⏱ on record since ${new Date(oldest.ts).toLocaleDateString()} · ≥${days}d`;
+          el.classList.remove('hidden');
+        }
+      } catch (e) { /* damaged att param — the badge just stays off */ }
+    }
+
     // If the link claims this tree is minted, verify it against the chain
     // (public RPC, no wallet) — the badge only shows when the chain agrees.
     const nftHash = /[#&]nft=(\d+)/.exec(location.hash);
@@ -1895,6 +1958,7 @@
       if (!hashTheta) theta = typeof data.theta === 'number' ? data.theta : -0.55;
       decals = Array.isArray(data.decals) ? data.decals : [];
       nft = data.nft || null;
+      atts = Array.isArray(data.atts) ? data.atts : [];
     }
 
     try { setupScene(); } catch (e) {
