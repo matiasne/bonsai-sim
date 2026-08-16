@@ -115,6 +115,65 @@
       return Number(id);   // 0 = not minted
     },
 
+    // ---------- wallet-free provenance (plain fetch JSON-RPC — never ethers)
+    // Selectors are compile-time constants of the ABI (precomputed with cast).
+    SEL: { dnaOf: '0x3e39d638', ownerOf: '0x6352211e' },
+
+    // PURE: selector + left-padded uint256 → eth_call calldata.
+    encodeUint(sel, n) {
+      return sel + BigInt(n).toString(16).padStart(64, '0');
+    },
+    // PURE: minimal ABI decoding of a single dynamic string return value.
+    decodeString(hex) {
+      const h = hex.replace(/^0x/, '');
+      const off = parseInt(h.slice(0, 64), 16) * 2;
+      const len = parseInt(h.slice(off, off + 64), 16) * 2;
+      const data = h.slice(off + 64, off + 64 + len);
+      let s = '';
+      for (let i = 0; i < data.length; i += 2) s += String.fromCharCode(parseInt(data.slice(i, i + 2), 16));
+      return s;
+    },
+    decodeAddress(hex) {
+      const h = hex.replace(/^0x/, '');
+      return '0x' + h.slice(24, 64);
+    },
+
+    async rpcCall(to, data) {
+      const r = await fetch(CFG.PUBLIC_RPC, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data }, 'latest'] }),
+      });
+      const j = await r.json();
+      if (j.error || !j.result) throw new Error(j.error ? j.error.message : 'empty rpc result');
+      return j.result;
+    },
+
+    // PURE core: does the on-chain envelope describe the SAME TREE as the
+    // viewed one? Identity = (seed, genesis) — the on-chain copy may be older
+    // (updates lag behind play), so bytes are compared by identity, not equality.
+    async tokenMatches(envelope, chainDnaCode) {
+      if (!chainDnaCode) return false;
+      try {
+        const onChain = await B.Sim.dnaDecode(chainDnaCode);
+        return !!onChain && onChain.v === 2 &&
+          (onChain.seed >>> 0) === (envelope.seed >>> 0) && onChain.g === envelope.g;
+      } catch (e) { return false; }
+    },
+
+    // Verify a share-link's minted claim: the tokenId travels in the URL, the
+    // chain is the authority. Returns {ok, owner} — never throws.
+    async verifyToken(envelope, tokenId) {
+      try {
+        const dnaHex = await this.rpcCall(CFG.CONTRACT, this.encodeUint(this.SEL.dnaOf, tokenId));
+        if (!(await this.tokenMatches(envelope, this.decodeString(dnaHex)))) return { ok: false };
+        const ownerHex = await this.rpcCall(CFG.CONTRACT, this.encodeUint(this.SEL.ownerOf, tokenId));
+        return { ok: true, owner: this.decodeAddress(ownerHex) };
+      } catch (e) {
+        return { ok: false };   // nonexistent token reverts; network may be down — badge just stays off
+      }
+    },
+
     // PURE: pull the freshly-minted tokenId out of the receipt's ERC-721
     // Transfer(0x0 → minter) log. Node-testable with a fixture receipt.
     parseTokenId(logs, contract) {

@@ -10,6 +10,7 @@
   const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
   const DNA_HASH = /[#&]dna=([^&\s]+)/.exec(location.hash);
   const VIEWER = !!DNA_HASH;   // #dna=… — read-only view of a shared bonsai
+  let viewerStatus = '🧬 viewing a shared bonsai — read-only · drag the pot to rotate';
   let BUFH = 176;                   // backbuffer height (pixel density × 176; CSS upscales)
   let BUFW = 176;                   // width follows the screen in wallpaper mode
   let aspect = 1;
@@ -1507,7 +1508,8 @@
       dna.t = S.simT;
       try {
         const code = await SIM.dnaEncode(dna);
-        const url = location.href.split('#')[0] + '#dna=' + code;
+        let url = location.href.split('#')[0] + '#dna=' + code;
+        if (nft && nft.tokenId) url += '&nft=' + nft.tokenId;   // viewer verifies the claim on-chain
         await navigator.clipboard.writeText(url);
         toast('🧬 DNA link copied — it opens a read-only view of this exact tree');
       } catch (e) {
@@ -1680,7 +1682,7 @@
 
   function updateStatus() {
     let txt;
-    if (VIEWER) txt = '🧬 viewing a shared bonsai — read-only · drag the pot to rotate';
+    if (VIEWER) txt = viewerStatus;
     else if (previewTree) txt = `🔮 your bonsai after ${previewYears} years of loving care — press NOW to return`;
     else if (mode === 'prune') txt = '✂️ click a branch or blossom to cut — esc to exit';
     else if (mode === 'trim') txt = '🍃 click a blossom pad to pinch it — esc to exit';
@@ -1845,6 +1847,24 @@
     lastEnv = B.Weather.env(new Date());
     updateAll();
     requestAnimationFrame(frame);
+
+    // If the link claims this tree is minted, verify it against the chain
+    // (public RPC, no wallet) — the badge only shows when the chain agrees.
+    const nftHash = /[#&]nft=(\d+)/.exec(location.hash);
+    if (nftHash) {
+      try {
+        const C = await loadChain();
+        const v = await C.verifyToken(dna, parseInt(nftHash[1], 10));
+        if (v.ok) {
+          const el = $('#fact-chain');
+          el.innerHTML = `<a href="https://sepolia.basescan.org/token/${C.CFG.CONTRACT}?a=${nftHash[1]}" ` +
+            `target="_blank" rel="noopener">⛓ token #${nftHash[1]}</a>`;
+          el.classList.remove('hidden');
+          viewerStatus = '🧬 viewing a shared bonsai · ⛓ minted on Base Sepolia — read-only';
+          statusEl.textContent = viewerStatus;
+        }
+      } catch (e) { /* network optional — the badge just stays off */ }
+    }
   }
 
   // ---------- boot

@@ -430,6 +430,25 @@ console.log('event log + replay (the envelope IS the tree)');
     ok(C.parseTokenId(logs.slice(0, 2), CONTRACT) === null, 'parseTokenId returns null when absent');
     ok(C.parseTokenId([{ address: CONTRACT, topics: [TRANSFER, pad('9'), pad('1'), pad('7')] }], CONTRACT) === null,
       'non-zero-from Transfer (a later resale) is not mistaken for the mint');
+
+    // wallet-free provenance codecs (badge path — plain fetch, never ethers)
+    ok(C.encodeUint(C.SEL.dnaOf, 1) === '0x3e39d638' + '0'.repeat(63) + '1',
+      'encodeUint builds exact dnaOf(1) calldata');
+    const abiStr = (s) => {   // ABI-encode a single string return value
+      const hex = [...s].map(ch => ch.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+      const padded = hex.padEnd(Math.ceil(hex.length / 64) * 64, '0');
+      return '0x' + (32).toString(16).padStart(64, '0') + s.length.toString(16).padStart(64, '0') + padded;
+    };
+    ok(C.decodeString(abiStr('hello bonsai')) === 'hello bonsai', 'decodeString round-trips an ABI string');
+    ok(C.decodeAddress('0x' + '0'.repeat(24) + 'ab'.repeat(20)) === '0x' + 'ab'.repeat(20),
+      'decodeAddress strips the padding');
+    const envA = { v: 2, seed: 777, g: G0, s: 0, t: 86400, e: [] };
+    const envB = { v: 2, seed: 777, g: G0, s: 0, t: 5 * 86400, e: [['W', 2 * 86400]] };  // same tree, older/newer
+    const envC = { v: 2, seed: 778, g: G0, s: 0, t: 86400, e: [] };                      // different tree
+    const codeA = await SIM.dnaEncode(envA);
+    ok(await C.tokenMatches(envB, codeA) === true, 'tokenMatches: same seed+genesis = same tree, even at different ages');
+    ok(await C.tokenMatches(envC, codeA) === false, 'tokenMatches: a different seed is a different tree');
+    ok(await C.tokenMatches(envA, 'garbage!!') === false, 'tokenMatches: junk on-chain data never matches');
   }
 
   console.log('replay performance');

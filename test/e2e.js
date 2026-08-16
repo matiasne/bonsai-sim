@@ -861,6 +861,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     check(true, 'no open air found for the viewer tap — skipped');
     check(true, 'viewer save check skipped with it');
   }
+  // a forged minted-claim must NOT show the badge: token #1 exists on-chain but
+  // belongs to a different tree (identity check), token #999 doesn't exist
+  for (const claim of [1, 999]) {
+    await vp.goto(URL + '#dna=' + dnaCode + '&nft=' + claim, { waitUntil: 'load' });
+    await vp.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+    await sleep(2500);   // give the RPC check time to complete (or fail quietly)
+    const forged = await vp.evaluate(() => ({
+      badgeHidden: document.querySelector('#fact-chain').classList.contains('hidden'),
+      healthy: __bonsai.tree.segs.size > 0,
+    }));
+    check(forged.badgeHidden && forged.healthy,
+      `forged minted claim (&nft=${claim}) shows no badge and the viewer stays healthy`);
+  }
   await vp.close();
 
   // --- optional NFT mint: with no wallet extension the button degrades to a
