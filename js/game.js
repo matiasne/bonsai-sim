@@ -105,6 +105,7 @@
   // ---------- state
   let S = null;       // deterministic sim state (B.Sim): tree, res, gp, burnH, soggy, trimBoost, dyingH, simT
   let dna = null;     // the envelope {v:2, seed, g, s, t, e, snap?} — S is always replay(dna) + live steps
+  let nft = null;     // minted-token record {tokenId, contract, chain, txHash, simT, ts} — save cosmetics, NEVER in the envelope
   let tree = null;    // alias of S.tree — rebound on boot/freshTree/log rewind
   let res = null;     // alias of S.res
   let pendingSec = 0; // wall-clock time not yet folded into the sim (sub-quantum remainder)
@@ -1072,6 +1073,7 @@
     S = SIM.replay(dna);
     tree = S.tree; res = S.res;
     pendingSec = 0;
+    nft = null;   // a new tree is a new (unminted) identity
     statsCache = tree.stats();
     decals = []; decalsDirty = true; treeKey = '';
     toast('🌱 a brand-new bonsai arrives!');
@@ -1162,6 +1164,7 @@
       decals: decals.slice(-48),
       sand: sandCanvas ? sandCanvas.toDataURL() : undefined,
       wx: B.Weather.serialize(),
+      nft: nft || undefined,
     }));
   }
 
@@ -1511,6 +1514,7 @@
         toast('🧬 could not copy the link (' + (e && e.message || e) + ')');
       }
     };
+    $('#btn-mint').onclick = mintOrUpdate;
     let resetArmed = 0;
     $('#btn-reset').onclick = (e) => {
       if (Date.now() - resetArmed < 3000) {
@@ -1531,7 +1535,90 @@
       ? 'location: not set — search a city below'
       : `location: ${st.city || 'unknown'} (${st.lat.toFixed(2)}, ${st.lon.toFixed(2)})`;
     $('#city-results').innerHTML = '';
+    renderMintState();
     $('#modal-settings').classList.remove('hidden');
+  }
+
+  // ---------- optional NFT mint (Base Sepolia testnet, lazy — see js/chain.js)
+  let chainLoad = null;
+  function loadChain() {
+    if (B.Chain) return Promise.resolve(B.Chain);
+    if (chainLoad) return chainLoad;
+    chainLoad = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'js/chain.js';
+      s.onload = () => B.Chain ? resolve(B.Chain) : reject(new Error('chain module failed to load'));
+      s.onerror = () => reject(new Error('chain module failed to load'));
+      document.head.appendChild(s);
+    });
+    return chainLoad;
+  }
+
+  function renderMintState() {
+    const btn = $('#btn-mint'), status = $('#mint-status');
+    if (!btn) return;
+    if (nft) {
+      btn.textContent = '⛓ UPDATE ON-CHAIN';
+      status.classList.remove('hidden');
+      status.innerHTML = `🪙 minted · Pixel Bonsai token #${nft.tokenId} · ` +
+        `<a href="https://sepolia.basescan.org/tx/${nft.txHash}" target="_blank" rel="noopener">tx</a>` +
+        ` · last on-chain age ${Math.floor((nft.simT || 0) / 86400)}d`;
+    } else {
+      btn.textContent = '🪙 MINT NFT';
+      status.classList.add('hidden');
+      status.textContent = '';
+    }
+  }
+
+  async function mintOrUpdate() {
+    if (guardViewer()) return;
+    const btn = $('#btn-mint');
+    btn.disabled = true;
+    try {
+      const C = await loadChain();
+      if (!C.CFG.CONTRACT) {
+        toast('🪙 the contract is not deployed yet — coming soon');
+        return;
+      }
+      if (!C.hasWallet()) {
+        toast('🪙 minting is optional and needs a wallet extension (MetaMask) — playing never does', { ms: 8000 });
+        return;
+      }
+      await C.loadEthers();
+      await C.connect();
+      await C.ensureNetwork();
+      dna.t = S.simT;
+      const code = await SIM.dnaEncode(dna);
+      const simTNow = Math.floor(S.simT);
+      if (nft) {
+        toast('⛓ confirm the update in your wallet…', { ms: 12000 });
+        const r = await C.update(nft.tokenId, code, simTNow);
+        nft.simT = simTNow; nft.txHash = r.txHash; nft.ts = Date.now();
+        toast('⛓ your on-chain bonsai is up to date!');
+      } else {
+        const treeId = C.treeIdOf(dna.seed, dna.g);
+        const existing = await C.readTokenOfTree(treeId);
+        if (existing) {
+          nft = { tokenId: existing, contract: C.CFG.CONTRACT, chain: C.CFG.CHAIN_ID, txHash: '', simT: simTNow, ts: Date.now() };
+          toast(`🪙 this tree is already minted — token #${existing}`);
+        } else {
+          toast('🪙 confirm the mint in your wallet…', { ms: 12000 });
+          const r = await C.mint({ treeId, dnaCode: code, simT: simTNow });
+          nft = { tokenId: r.tokenId, contract: C.CFG.CONTRACT, chain: C.CFG.CHAIN_ID, txHash: r.txHash, simT: simTNow, ts: Date.now() };
+          toast(`🪙 minted! Pixel Bonsai token #${r.tokenId} is alive on Base Sepolia`, { ms: 8000 });
+        }
+      }
+      save();
+      renderMintState();
+    } catch (e) {
+      if (e && (e.code === 4001 || e.code === 'ACTION_REJECTED')) {
+        toast('🪙 no worries — nothing was sent');
+      } else {
+        toast('🪙 ' + (((e && (e.shortMessage || e.message)) || 'something went wrong') + '').slice(0, 120), { ms: 7000 });
+      }
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function citySearch() {
@@ -1679,6 +1766,7 @@
       get res() { return res; },
       get sim() { return S; },
       get viewer() { return VIEWER; },
+      get nft() { return nft; },
       dna: () => { dna.t = S.simT; return JSON.parse(SIM.canonical(dna)); },
       dnaCode: () => { dna.t = S.simT; return SIM.dnaEncode(dna); },
       verifyReplay: () => {   // replay the envelope and diff it against the live state
@@ -1786,6 +1874,7 @@
     if (data) {
       if (!hashTheta) theta = typeof data.theta === 'number' ? data.theta : -0.55;
       decals = Array.isArray(data.decals) ? data.decals : [];
+      nft = data.nft || null;
     }
 
     try { setupScene(); } catch (e) {

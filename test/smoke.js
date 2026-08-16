@@ -409,6 +409,29 @@ console.log('event log + replay (the envelope IS the tree)');
     ok(code[0] === '1' && code.length < SIM.canonical(env).length + 2, 'deflate codec engaged');
   }
 
+  console.log('chain module (pure parts only — no network, no wallet)');
+  {
+    require(path.join(__dirname, '..', 'js', 'chain.js'));
+    const C = B.Chain;
+    ok(C.CFG.CHAIN_ID === 84532 && C.CFG.CHAIN_ID_HEX === '0x14a34', 'chain config targets Base Sepolia');
+    ok(C.CFG.CONTRACT === '' || /^0x[0-9a-fA-F]{40}$/.test(C.CFG.CONTRACT),
+      `contract address well-formed or pending deploy (${C.CFG.CONTRACT || 'unset'})`);
+    ok(C.CFG.CHAIN_PARAMS.rpcUrls.length > 0 && C.CFG.ABI.some(f => /^function mint\(/.test(f)),
+      'wallet add-chain params + mint ABI present');
+    const CONTRACT = '0x' + 'ab'.repeat(20);
+    const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+    const pad = (hex) => '0x' + hex.replace(/^0x/, '').padStart(64, '0');
+    const logs = [
+      { address: '0x' + 'cd'.repeat(20), topics: [TRANSFER, pad('0'), pad('1'), pad('7')] },  // other contract
+      { address: CONTRACT, topics: ['0x' + 'ee'.repeat(32), pad('0'), pad('1'), pad('7')] },  // other event
+      { address: CONTRACT.toUpperCase().replace('0X', '0x'), topics: [TRANSFER, pad('0'), pad('beef'), pad('2a')] }, // the mint
+    ];
+    ok(C.parseTokenId(logs, CONTRACT) === 42, 'parseTokenId finds the mint Transfer log (case-insensitive)');
+    ok(C.parseTokenId(logs.slice(0, 2), CONTRACT) === null, 'parseTokenId returns null when absent');
+    ok(C.parseTokenId([{ address: CONTRACT, topics: [TRANSFER, pad('9'), pad('1'), pad('7')] }], CONTRACT) === null,
+      'non-zero-from Transfer (a later resale) is not mistaken for the mint');
+  }
+
   console.log('replay performance');
   {
     const yearEnv = { v: 2, seed: 2027, g: G0, s: 0, t: 366 * 86400, e: [] };
