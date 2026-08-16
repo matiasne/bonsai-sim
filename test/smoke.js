@@ -451,6 +451,86 @@ console.log('event log + replay (the envelope IS the tree)');
     ok(await C.tokenMatches(envA, 'garbage!!') === false, 'tokenMatches: junk on-chain data never matches');
   }
 
+  console.log('timestamp notary (attest server ↔ offline verifier)');
+  {
+    require(path.join(__dirname, '..', 'js', 'notary.js'));
+    const N = B.Notary;
+    const api = require(path.join(__dirname, '..', 'api', 'notarize.js'));
+    const nodeCrypto = require('crypto');
+
+    ok(await SIM.sha256Hex('') === 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      'sha256Hex matches the known empty-string vector');
+
+    // truncation: full-length prefix is byte-identical to the envelope itself…
+    const env = { v: 2, seed: 4242, g: G0, s: 0, t: 5 * 86400, e: [['W', 86400], ['W', 2 * 86400], ['O', 3 * 86400, 86400]] };
+    ok(SIM.canonical(SIM.truncateEnvelope(env, env.t, env.e.length)) === SIM.canonical(env),
+      'full truncation reproduces the envelope byte-for-byte');
+    const prefix = SIM.truncateEnvelope(env, 2 * 86400, 2);
+    ok(prefix.e.length === 2 && prefix.t === 2 * 86400 && prefix.seed === 4242, 'truncation slices the history prefix');
+    // …and a migrated (snap-bearing) envelope keeps its snap through truncation
+    const snapTree = new B.TreeModel({ seed: 3 });
+    const snapEnv = { v: 2, seed: 0, g: G0, s: 0, t: 86400, e: [['O', 0, 86400]], snap: { tree: snapTree.serialize(), gp: 0.5 } };
+    ok(SIM.canonical(SIM.truncateEnvelope(snapEnv, snapEnv.t, 1)) === SIM.canonical(snapEnv),
+      'snap envelopes truncate without losing the snap (hash regression guard)');
+
+    // full loop with a throwaway keypair: the api signs, the client verifies
+    const { publicKey, privateKey } = nodeCrypto.generateKeyPairSync('ed25519');
+    const privB64 = privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64url');
+    const pubB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64url');
+    api._resetKeyCache();
+    const hash = await SIM.hashEnvelope(SIM.truncateEnvelope(env, env.t, env.e.length));
+    const ts = 1786900000000;
+    const att = { ts, simT: env.t, n: env.e.length, sig: api.sign(hash, ts, privB64) };
+    ok(await N.verify(env, att, [pubB64]) === true, 'server-signed attestation verifies offline (format-drift guard)');
+
+    // the prefix property: the tree keeps growing, old attestations keep holding
+    const grown = { ...env, t: 9 * 86400, e: [...env.e, ['W', 6 * 86400], ['L', 7 * 86400, 3600]] };
+    ok(await N.verify(grown, att, [pubB64]) === true, 'an appended-to history still verifies its old attestation');
+
+    // tampering in any dimension breaks it
+    const tampered = { ...grown, e: [['W', 43200], ...grown.e.slice(1)] };
+    ok(await N.verify(tampered, att, [pubB64]) === false, 'tampering with an attested event breaks verification');
+    ok(await N.verify({ ...grown, seed: 4243 }, att, [pubB64]) === false, 'a different seed never verifies');
+    ok(await N.verify(grown, { ...att, ts: ts + 1 }, [pubB64]) === false, 'a shifted timestamp breaks the signature');
+    ok(await N.verify(grown, { ...att, sig: att.sig.slice(0, -2) + 'AA' }, [pubB64]) === false, 'a corrupted signature fails');
+    ok(await N.verify(grown, att, []) === false, 'no known keys → never verifies');
+
+    // undo-splice semantics: attestations covering the spliced region die, older ones survive
+    const attEarly = { ts, simT: 86400, n: 1, sig: api.sign(await SIM.hashEnvelope(SIM.truncateEnvelope(env, 86400, 1)), ts, privB64) };
+    const spliced = { ...env, e: env.e.filter((_, i) => i !== 1) };
+    ok(await N.verify(spliced, attEarly, [pubB64]) === true, 'attestation older than a spliced event survives the undo');
+    ok(await N.verify(spliced, att, [pubB64]) === false, 'attestation covering the spliced event correctly dies');
+
+    // URL codec + share subset
+    const many = Array.from({ length: 20 }, (_, i) => ({ ts: ts + i * 864e5, simT: i * 86400, n: i, sig: att.sig }));
+    const sub = N.pickShareSubset(many, 8);
+    ok(sub.length === 8 && sub[0] === many[0] && sub[7] === many[19], 'share subset keeps first + last, caps at 8');
+    const rt = N.decodeAtts(N.encodeAtts(sub));
+    ok(rt.length === 8 && rt[0].ts === many[0].ts && rt[7].n === many[19].n, 'attestation URL codec round-trips');
+
+    // the api handler itself, with a stubbed req/res
+    const call = (method, body, envKey) => new Promise((resolve) => {
+      const prev = process.env.NOTARY_KEY;
+      if (envKey === null) delete process.env.NOTARY_KEY; else process.env.NOTARY_KEY = envKey;
+      api._resetKeyCache();
+      const res = {
+        headers: {}, code: 0,
+        setHeader(k, v) { this.headers[k] = v; },
+        status(c) { this.code = c; return this; },
+        json(j) { if (prev === undefined) delete process.env.NOTARY_KEY; else process.env.NOTARY_KEY = prev; resolve({ code: this.code, body: j, headers: this.headers }); },
+      };
+      api({ method, body }, res);
+    });
+    ok((await call('GET', {}, privB64)).code === 405, 'handler rejects non-POST');
+    ok((await call('POST', { hash: 'nope' }, privB64)).code === 400, 'handler rejects malformed hashes');
+    ok((await call('POST', { hash }, null)).code === 503, 'handler without a key says so');
+    const good = await call('POST', { hash }, privB64);
+    ok(good.code === 200 && Math.abs(good.body.ts - Date.now()) < 5000 && good.headers['cache-control'] === 'no-store',
+      'handler signs with its own fresh clock');
+    ok(await N.verify(env, { ts: good.body.ts, simT: env.t, n: env.e.length, sig: good.body.sig }, [pubB64]) === true,
+      'a real handler response verifies end-to-end');
+  }
+
   console.log('replay performance');
   {
     const yearEnv = { v: 2, seed: 2027, g: G0, s: 0, t: 366 * 86400, e: [] };

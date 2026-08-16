@@ -286,6 +286,25 @@
     return JSON.parse(new TextDecoder().decode(json));
   }
 
+  // ---------- attestation helpers (see js/notary.js)
+  async function sha256Hex(str) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // The history prefix an attestation covers: the first n events up to simT.
+  // snap passes through by reference — a migrated tree's canonical bytes
+  // include it, so dropping it would break every hash on such trees.
+  function truncateEnvelope(env, simT, n) {
+    const out = { v: 2, seed: env.seed >>> 0, g: env.g, s: env.s ? 1 : 0, t: simT, e: (env.e || []).slice(0, n) };
+    if (env.snap) out.snap = env.snap;
+    return out;
+  }
+
+  async function hashEnvelope(env) {
+    return sha256Hex(canonical(env));
+  }
+
   // Advance whole quanta (sub-quantum remainders are the caller's to keep).
   // Aggregated fx events are capped — replays cross years and only the UI cares.
   function advance(state, seconds, off) {
@@ -306,6 +325,7 @@
     seasonInfo, newState, healthTarget, step, advance,
     applyAction, quantBend, decodeBend, loadSnap, replay, canonical,
     dnaEncode, dnaDecode,
+    sha256Hex, truncateEnvelope, hashEnvelope, b64u,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = B;
