@@ -103,6 +103,26 @@ so that a bonsai **is** its history:
   that opens a **read-only viewer** of your exact tree on any machine — it replays your whole
   history in milliseconds and touches nothing locally.
 
+## ⏱ Provable age — the timestamp notary
+
+A grown bonsai's value is that it took *real months of real care* — so the game makes that
+provable. Roughly once a day (silently, never blocking play), it sends a **hash** of the tree's
+canonical history to `/api/notarize`, a tiny serverless function that returns the hash signed
+(Ed25519) with the **server's own clock**. These attestations:
+
+- ride along in DNA links (`&att=…`) and are verified **fully offline** by the viewer against
+  public keys committed in [`js/notary.js`](js/notary.js) — the badge reads
+  `⏱ on record since <date> · ≥N real days`;
+- can't be backdated (the server signs with its own time — a freshly fabricated log gets a
+  fresh timestamp and proves nothing), and can't be transplanted (the hash binds the seed,
+  genesis, and every event byte of one exact history);
+- prove **the history's age, not who grew it** — a fork of a shared DNA link verifies
+  truthfully, because that history really is that old. Ownership is the NFT's job, below.
+
+The notary is the game's only backend, it holds no data (stateless signing), and everything
+still works offline — attestations are opportunistic. Key rotation: append the new public key
+to `PUBKEYS` (old attestations stay verifiable) and swap the `NOTARY_KEY` env in Vercel.
+
 ## 🪙 Optional NFT — a living token (testnet)
 
 The bonsai can be minted as a **living NFT** on **Base Sepolia** (a free test network):
