@@ -62,16 +62,22 @@
   </section>
 
   <nav id="actions">
-    <button class="btn" id="btn-water">💧 WATER</button>
-    <button class="btn" id="btn-mist">🌫 MIST</button>
-    <button class="btn" id="btn-feed">🧪 FEED</button>
-    <button class="btn mode" id="btn-prune">✂️ PRUNE</button>
-    <button class="btn mode" id="btn-wire">➰ WIRE</button>
-    <button class="btn mode" id="btn-trim">🍃 TRIM</button>
     <button class="btn mode small" id="btn-future" title="peek 2–4 years ahead">🔮</button>
     <button class="btn small" id="btn-ff" title="time-lapse: one hour passes">⏩</button>
     <button class="btn small" id="btn-help" title="care guide">?</button>
     <button class="btn small" id="btn-settings" title="location &amp; settings">⚙</button>
+    <button class="btn keep hidden" id="btn-keep" title="keep this bonsai forever — mint it as your NFT (free, Base Sepolia testnet)">🪙 KEEP</button>
+  </nav>
+
+  <!-- wallpaper-only care dock: full tending from the desktop (auto-hides when idle) -->
+  <nav id="wp-dock" class="hidden" aria-label="bonsai care">
+    <button class="btn small" id="wp-water" title="water the soil">💧</button>
+    <button class="btn small" id="wp-mist" title="mist the leaves">🌫</button>
+    <button class="btn small" id="wp-feed" title="feed the roots">🧪</button>
+    <button class="btn small mode" id="wp-prune" title="prune — then click a branch to cut">✂️</button>
+    <button class="btn small mode" id="wp-wire" title="wire — then click a branch to bend">➰</button>
+    <button class="btn small mode" id="wp-trim" title="trim — then pinch the blossom pads">🍃</button>
+    <button class="btn small" id="wp-ff" title="time-lapse: one hour passes">⏩</button>
   </nav>
 
   <div id="toasts"></div>
@@ -123,11 +129,16 @@
         <button class="btn" id="btn-geo">📍 USE MY LOCATION</button>
       </div>
       <hr>
+      <p class="fine">background</p>
+      <div id="bg-picker"></div>
+      <hr>
       <div class="row">
         <button class="btn" id="btn-dna" title="copy a link that shows this exact tree, read-only">🧬 COPY DNA LINK</button>
-        <button class="btn" id="btn-mint" title="optional: mint this bonsai as a living NFT on Base Sepolia (testnet) — playing never needs a wallet">🪙 MINT NFT</button>
+        <button class="btn" id="btn-mint" title="keep this bonsai forever: mint it as your living NFT on Base Sepolia (testnet) — the demo plays without a wallet">🪙 KEEP THIS BONSAI</button>
       </div>
       <p class="fine hidden" id="mint-status"></p>
+      <button class="btn" id="btn-wallpaper" title="put your bonsai on your desktop">🖼 PUT ON MY DESKTOP</button>
+      <p class="fine" id="sync-status"></p>
       <div class="row">
         <button class="btn danger" id="btn-reset">🌱 NEW TREE</button>
       </div>

@@ -25,6 +25,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.setViewport({ width: 720, height: 980 });
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  // A demo (unminted) tree with progress raises a beforeunload "leave?" prompt so the
+  // player doesn't lose it; auto-accept it here so navigations don't hang in headless.
+  page.on('dialog', d => d.accept().catch(() => {}));
   // network-resource failures (geo/weather API hiccups) are tolerated by the app's fallback chain
   page.on('console', m => { if (m.type() === 'error' && !/net::|favicon|Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
 
@@ -43,8 +46,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const t0 = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: __bonsai.res.water, blossoms: __bonsai.tree.stats().blossoms }));
   check(t0.segs > 8, `48h fast-forward grew the tree (${t0.segs} segs, ${t0.blossoms} blossoms)`);
 
-  // --- WATER button
-  await page.click('#btn-water');
+  // --- water (tap the open air; here via the care hook)
+  await page.evaluate(() => __bonsai.water());
   await sleep(150);
   const w1 = await page.evaluate(() => __bonsai.res.water);
   check(w1 > t0.water, `WATER button raised moisture ${t0.water.toFixed(1)} → ${w1.toFixed(1)}`);
@@ -355,7 +358,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
 
   // --- trim tool: pinch a blossom pad → smaller pad, ramification boost, no mist
-  await page.click('#btn-trim');
+  await page.evaluate(() => __bonsai.setMode('trim'));
   await sleep(150);
   const trimCursor = await page.evaluate(() => getComputedStyle(document.querySelector('#view')).cursor);
   check(/svg/.test(trimCursor), 'trim mode shows the pinching-shears cursor');
@@ -538,7 +541,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
 
   // --- prune tool: cursor + click a blossom tip
-  await page.click('#btn-prune');
+  await page.evaluate(() => __bonsai.setMode('prune'));
   const pruneCursor = await page.evaluate(() => getComputedStyle(document.querySelector('#view')).cursor);
   check(/svg/.test(pruneCursor), 'prune mode turns the cursor into the scissors tool');
   const target = await page.evaluate(() => {
@@ -568,7 +571,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
 
   // --- wire tool: cursor + click a low branch and drag to bend, then auto-release
-  await page.click('#btn-wire');
+  await page.evaluate(() => __bonsai.setMode('wire'));
   await sleep(400); // wire mode shrinks puffs → rebuild
   const wireCursor = await page.evaluate(() => getComputedStyle(document.querySelector('#view')).cursor);
   check(/svg/.test(wireCursor), 'wire mode turns the cursor into the wire tool');
@@ -605,7 +608,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   let wireT = null, wireRes = null;
   for (let attempt = 0; attempt < 2 && !wireRes; attempt++) {
     const m = await page.evaluate(() => __bonsai.mode);
-    if (m !== 'wire') { await page.click('#btn-wire'); await sleep(300); }
+    if (m !== 'wire') { await page.evaluate(() => __bonsai.setMode('wire')); await sleep(300); }
     wireT = await findWireTarget();
     if (!wireT) break;
     await page.mouse.move(wireT.x, wireT.y);
@@ -646,7 +649,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(120);
 
   // --- right-click cancels any tool / menu
-  await page.click('#btn-wire');
+  await page.evaluate(() => __bonsai.setMode('wire'));
   await sleep(150);
   await page.mouse.click(rect.left + rect.w / 2, rect.top + 20, { button: 'right' });
   await sleep(150);
@@ -671,8 +674,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     __bonsai.res.food = Math.min(__bonsai.res.food, 60);
   });
   const meters0 = await page.evaluate(() => ({ food: __bonsai.res.food, mist: __bonsai.res.mist }));
-  await page.click('#btn-feed');
-  await page.click('#btn-mist');
+  await page.evaluate(() => { __bonsai.feed(); __bonsai.mist(); });
   await sleep(150);
   const meters = await page.evaluate(() => ({ food: __bonsai.res.food, mist: __bonsai.res.mist }));
   check(meters.food > meters0.food, `FEED raised food ${meters0.food.toFixed(0)} → ${meters.food.toFixed(0)}`);
@@ -793,6 +795,30 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.click('#btn-future'); // close the bar
   await sleep(150);
 
+  // --- demo trees are NOT persisted: an unminted tree lives only in memory, so a
+  // reload discards it and boots a fresh sapling. This is the "mint to keep" model.
+  const demoBefore = await page.evaluate(() => ({
+    minted: __bonsai.isMinted(),
+    segs: __bonsai.tree.segs.size,
+    stored: localStorage.getItem('pixel-bonsai-v1'),
+  }));
+  check(demoBefore.minted === false, 'the grown tree is still an unsaved demo (not minted)');
+  check(!demoBefore.stored, 'a demo tree writes nothing to localStorage');
+  await page.goto(URL, { waitUntil: 'load' });
+  await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+  await pinWeather(page);
+  await sleep(800);
+  const demoAfter = await page.evaluate(() => __bonsai.tree.segs.size);
+  check(demoAfter < demoBefore.segs, `reloading a demo starts a fresh sapling (${demoBefore.segs} → ${demoAfter} segs)`);
+
+  // --- KEEP (mint) makes the tree persist. Grow it a little, keep it, then the
+  // envelope + meters must survive reload exactly (replay is the authority).
+  await page.evaluate(() => __bonsai.simulate(24 * 3600));
+  await sleep(400);
+  const kept = await page.evaluate(() => { const n = __bonsai.keep(); return { minted: __bonsai.isMinted(), token: n && n.tokenId }; });
+  check(kept.minted === true && kept.token === 1, 'KEEP mints the tree and flips it to owned');
+  check(await page.evaluate(() => !!localStorage.getItem('pixel-bonsai-v1')), 'a kept tree now persists to localStorage');
+
   // --- persistence: reload and compare. Boot replays the action log (the
   // envelope is the authority), so direct __bonsai.res pokes made above do NOT
   // survive — replaying the log twice must land on the same tree and meters.
@@ -801,10 +827,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
   await pinWeather(page);
   await sleep(800);
-  const postReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum() }));
+  const postReload = await page.evaluate(() => ({ segs: __bonsai.tree.segs.size, water: Math.round(__bonsai.res.water), sand: __bonsai.sandSum(), minted: __bonsai.isMinted() }));
   check(postReload.segs === preReload.segs, `reload replayed the same tree (${postReload.segs} segs)`);
   check(postReload.water >= 0 && postReload.water <= 100, `reload replayed the meters (water ${postReload.water})`);
   check(postReload.sand === preReload.sand, 'reload restored the raked sand');
+  check(postReload.minted === true, 'the kept (minted) status survives reload');
   const reload2 = await (async () => {
     await page.goto(URL, { waitUntil: 'load' });
     await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
@@ -888,11 +915,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   }
   await vp.close();
 
-  // --- optional NFT mint: with no wallet extension the button degrades to a
-  // friendly toast and the game stays fully healthy (chain.js loads lazily)
+  // --- KEEP / mint: with no wallet extension the button degrades to a friendly
+  // toast and the game stays fully healthy (chain.js loads lazily)
   await page.evaluate(() => document.querySelector('#btn-settings').click());
   await sleep(200);
-  check(await page.evaluate(() => !!document.querySelector('#btn-mint')), 'settings offers the optional MINT button');
+  check(await page.evaluate(() => !!document.querySelector('#btn-mint')), 'settings offers the KEEP / mint button');
   await page.evaluate(() => document.querySelector('#btn-mint').click());
   await sleep(1500);
   const mintDegrade = await page.evaluate(() => ({
@@ -906,6 +933,66 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(await page.evaluate(() => __bonsai.atts.length === 0),
     'file:// pages never request attestations (protocol gate)');
   await page.evaluate(() => document.querySelector('#modal-settings').classList.add('hidden'));
+
+  // --- backgrounds: each preset applies, changes the clear color, and persists
+  const bgDefault = await page.evaluate(() => __bonsai.bg);
+  check(bgDefault === 'classic', `background defaults to classic (${bgDefault})`);
+  await page.evaluate(() => __bonsai.setBg('void'));
+  await sleep(200);
+  const bgVoid = await page.evaluate(() => ({ bg: __bonsai.bg, clear: __bonsai.clearColor }));
+  check(bgVoid.bg === 'void', 'selecting a background updates the active preset');
+  check(bgVoid.clear === '#05070a', `void preset drives the scene clear color (${bgVoid.clear})`);
+  await page.evaluate(() => __bonsai.setBg('sakura'));
+  await sleep(200);
+  const bgSakura = await page.evaluate(() => __bonsai.clearColor);
+  check(bgSakura === '#f3d7e2', `sakura preset changes the clear color (${bgSakura})`);
+  // still interactive after a background change (picking unaffected)
+  const waterPreBg = await page.evaluate(() => __bonsai.res.water);
+  await page.click('#btn-water');
+  await sleep(150);
+  check(await page.evaluate(() => __bonsai.res.water) > waterPreBg, 'care still works after a background change');
+  const bgPersist = await (async () => {
+    await page.goto(URL, { waitUntil: 'load' });
+    await page.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+    await pinWeather(page);
+    await sleep(500);
+    return page.evaluate(() => __bonsai.bg);
+  })();
+  check(bgPersist === 'sakura', `the chosen background survives reload (${bgPersist})`);
+  await page.evaluate(() => __bonsai.setBg('classic'));   // reset for later checks
+  await sleep(150);
+
+  // --- same-origin live sync: a second tab (shares localStorage + BroadcastChannel)
+  // acts as the "wallpaper"; care in one converges in the other, one leader only.
+  const wpSync = await browser.newPage();
+  await wpSync.setViewport({ width: 900, height: 700 });
+  wpSync.on('pageerror', e => errors.push('sync pageerror: ' + e.message));
+  wpSync.on('dialog', d => d.accept().catch(() => {}));
+  await wpSync.goto(URL + '#wallpaper', { waitUntil: 'load' });
+  await wpSync.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
+  await pinWeather(wpSync);
+  await sleep(1400);   // let hello/leader election settle
+  // BroadcastChannel is same-origin; whether it connects across two headless file://
+  // tabs varies by sandbox. Detect it and either verify live sync, or verify the
+  // honest fallback (each context keeps its own tree) — never crash.
+  const peersSeen = await Promise.all([page.evaluate(() => __bonsai.sawPeer), wpSync.evaluate(() => __bonsai.sawPeer)]);
+  const synced = peersSeen[0] && peersSeen[1];
+  if (synced) {
+    const leaders = await Promise.all([page.evaluate(() => __bonsai.isLeader), wpSync.evaluate(() => __bonsai.isLeader)]);
+    check(leaders.filter(Boolean).length === 1, `exactly one context is the sync leader (${leaders.join(',')})`);
+    const dnaA = await page.evaluate(() => __bonsai.dnaCode());
+    const dnaB = await wpSync.evaluate(() => __bonsai.dnaCode());
+    check(dnaA === dnaB, 'both windows show the identical tree envelope');
+    await wpSync.evaluate(() => document.querySelector('#btn-water') && document.querySelector('#btn-water').click());
+    await sleep(1500);
+    const dnaA2 = await page.evaluate(() => __bonsai.dnaCode());
+    const dnaB2 = await wpSync.evaluate(() => __bonsai.dnaCode());
+    check(dnaA2 === dnaB2, 'a care action in one window converges the other (single shared log)');
+  } else {
+    check(await page.evaluate(() => __bonsai.isLeader), 'no shared channel: main window stays its own leader (honest fallback)');
+    check(await wpSync.evaluate(() => __bonsai.isLeader), 'no shared channel: wallpaper keeps its own tree (honest fallback)');
+  }
+  await wpSync.close();
 
   // --- wallpaper mode: fullscreen widescreen scene, UI hidden, cut & wire usable
   const wp0 = await browser.newPage();
@@ -933,7 +1020,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // wallpaper mode preserves the page's stored choice rather than overwriting it with
   // the pinned 2×. Inject a coarse pix2 and reload in the same page.
   const injected = await wp0.evaluate(() => {
-    const d = JSON.parse(localStorage.getItem('pixel-bonsai-v1'));
+    const raw = localStorage.getItem('pixel-bonsai-v1');
+    if (!raw) return false;   // sandboxed file:// tab has its own (empty) storage this run
+    const d = JSON.parse(raw);
     d.pix2 = 0;
     localStorage.setItem('pixel-bonsai-v1', JSON.stringify(d));
     return JSON.parse(localStorage.getItem('pixel-bonsai-v1')).pix2 === 0;
@@ -942,10 +1031,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await wp0.waitForFunction('window.__bonsai && window.__bonsai.tree', { timeout: 12000 });
   await pinWeather(wp0);
   await sleep(400);
-  const wpCoarse = await wp0.evaluate(() => ({
-    bufH: document.querySelector('#view').height,
-    savedPix: JSON.parse(localStorage.getItem('pixel-bonsai-v1')).pix2,
-  }));
+  const wpCoarse = await wp0.evaluate(() => {
+    const raw = localStorage.getItem('pixel-bonsai-v1');
+    return { bufH: document.querySelector('#view').height, savedPix: raw ? JSON.parse(raw).pix2 : null };
+  });
   // the render pin is the user-facing behavior: even with a coarse saved density the
   // wallpaper always boots at the fine 2× buffer (there's no ▦ button on the desktop
   // to fix a chunky save). Unconditional — holds however the sandbox treats storage.

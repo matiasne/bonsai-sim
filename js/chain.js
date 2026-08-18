@@ -1,7 +1,8 @@
-/* Pixel Bonsai — optional on-chain layer (Base Sepolia testnet).
-   Lazily loaded ONLY when the user clicks MINT: normal play never touches this
-   file, never loads ethers, never needs a wallet. The wallet is the only
-   identity — there are no accounts anywhere in this game. */
+/* Pixel Bonsai — on-chain ownership layer (Base Sepolia testnet).
+   The free demo never touches this file, never loads ethers, never needs a
+   wallet — it is lazily loaded only when the user KEEPs (mints) their tree, or
+   to recover an already-owned tree on boot. Minting is what makes a demo tree
+   persistent and owned: the wallet is the only identity, there are no accounts. */
 (function (root) {
   'use strict';
   const B = root.Bonsai = root.Bonsai || {};

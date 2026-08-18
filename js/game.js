@@ -10,6 +10,10 @@
   const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
   const DNA_HASH = /[#&]dna=([^&\s]+)/.exec(location.hash);
   const VIEWER = !!DNA_HASH;   // #dna=… — read-only view of a shared bonsai
+  // #wallpaper&seed=<dna>[&nft=<id>] — one-time seed for a fresh wallpaper install:
+  // the tree it starts as before it grows (and, same-origin, syncs) on its own.
+  const SEED_HASH = WALLPAPER ? /[#&]seed=([^&\s]+)/.exec(location.hash) : null;
+  const SEED_NFT = WALLPAPER ? /[#&]nft=(\d+)/.exec(location.hash) : null;
   let viewerStatus = '🧬 viewing a shared bonsai — read-only · drag the pot to rotate';
   let BUFH = 176;                   // backbuffer height (pixel density × 176; CSS upscales)
   let BUFW = 176;                   // width follows the screen in wallpaper mode
@@ -107,6 +111,9 @@
   let S = null;       // deterministic sim state (B.Sim): tree, res, gp, burnH, soggy, trimBoost, dyingH, simT
   let dna = null;     // the envelope {v:2, seed, g, s, t, e, snap?} — S is always replay(dna) + live steps
   let nft = null;     // minted-token record {tokenId, contract, chain, txHash, simT, ts} — save cosmetics, NEVER in the envelope
+  // A tree is "kept" (persisted + owned) only once it is minted. Until then it is a
+  // free demo that lives only in memory — see save() and the KEEP button.
+  const isMinted = () => !!(nft && nft.tokenId);
   let atts = [];      // notary attestations {ts, simT, n, sig} — provable history age; save cosmetics, NEVER in the envelope
   let attInFlight = false, attLastTry = 0;
   let tree = null;    // alias of S.tree — rebound on boot/freshTree/log rewind
@@ -119,8 +126,16 @@
   const previewCache = new Map();
   let decals = [], decalsDirty = true;
   let lastEnv = null, statsCache = null;
+  let keepNudged = false;   // one-shot: nudge to KEEP at the first attachment moment
+  let bg = 'classic';       // selected background preset key (cosmetic; rides the save)
+  // ---- same-origin live sync (browser ⇄ desktop wallpaper share one tree)
+  const CLIENT_ID = ((Math.random() * 1e9) >>> 0).toString(36) + '-' + ((Math.random() * 1e9) >>> 0).toString(36);
+  let syncCh = null;        // BroadcastChannel or null (unsupported)
+  let isLeader = true;      // sole context is the leader; only the leader advances time
+  let sawPeer = false;      // another same-origin context is alive
+  let applyingRemote = false; // guard: don't rebroadcast a save we just applied
   let lastTick = Date.now(), lastSaveAt = Date.now();
-  let drag = null, lastInteract = 0;
+  let drag = null, lastInteract = 0, dockWake = 0;
   const fxRng = B.makeRng((Math.random() * 0xffffffff) >>> 0);
 
   // ---------- Three.js scene
@@ -742,19 +757,38 @@
 
     window.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
     window.addEventListener('pagehide', save);
+
+    // A demo tree isn't saved — warn before it's lost, but only once it has some
+    // progress worth keeping (any care action logged). Minted trees persist, so no warning.
+    window.addEventListener('beforeunload', (e) => {
+      if (!VIEWER && !isMinted() && dna && dna.e && dna.e.length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
   }
 
   // ---------- the action log
   // Every state-changing user action goes through SIM.applyAction and, if the
   // sim accepted it, is appended here. The envelope (seed + this log) is the
   // bonsai — saves, undo and DNA sharing all replay it.
-  function appendEvent(ev) { dna.e.push(ev); }
+  function appendEvent(ev) {
+    dna.e.push(ev);
+    // On a follower, the leader owns the shared log — forward the action so it lands
+    // there exactly once. Our local push is optimistic and will be replaced when the
+    // leader's authoritative save comes back (applyRemoteSave). Time ops (O/L) are
+    // never forwarded — only the leader generates those.
+    if (!isLeader && !applyingRemote && ev && ev[0] !== 'O' && ev[0] !== 'L') {
+      syncPost({ type: 'action', from: CLIENT_ID, ev });
+    }
+  }
 
   // Rebuild the sim state from the envelope (after an undo edited the log).
   function rebuildFromLog() {
     dna.t = S.simT;
     S = SIM.replay(dna);
     tree = S.tree; res = S.res;
+    springAnim = null;   // the tree it was swinging is gone; replay already has the final pose
     statsCache = tree.stats();
     previewCache.clear();
     treeKey = '';
@@ -800,11 +834,29 @@
   // direction — proportionally to how unset it still is (canonical, instant).
   function doUnwire(id) {
     if (guardViewer()) return;
+    const seg = tree.segs.get(id);
+    // Capture the bent pose + spring axis/angle BEFORE the sim rotates the model,
+    // so we can replay that rotation as a cosmetic swing-back (see startSpringAnim).
+    let startDirs = null, springAxis = null, springTotal = 0;
+    if (seg && seg.dir0 && !previewTree) {
+      const V = B.Vec;
+      startDirs = new Map();
+      const walk = (s) => { startDirs.set(s.id, s.dir.slice()); for (const c of s.children) walk(c); };
+      walk(seg);
+      const axis = V.cross(seg.dir, seg.dir0);
+      const dot = clamp(V.dot(V.norm(seg.dir), V.norm(seg.dir0)), -1, 1);
+      const setFrac = clamp(seg.wireAge / tree.wireSetHours(seg), 0, 1);
+      springTotal = Math.acos(dot) * (1 - setFrac);
+      if (V.len(axis) > 1e-4) springAxis = V.norm(axis);
+    }
     const ev = ['u', S.simT, id];
     const out = SIM.applyAction(S, ev);
     if (!out.ok) return;
     appendEvent(ev);
     treeKey = '';
+    if (out.sprung && springAxis && springTotal > 0.02) {
+      startSpringAnim(id, springAxis, springTotal, startDirs);   // swing back visually
+    }
     toast(out.sprung
       ? (out.setFrac > 0.5 ? '➰ wire off — mostly set, it springs back a little' : '➰ wire off — not set yet, the branch springs back')
       : '➰ wire removed');
@@ -1044,9 +1096,7 @@
     view.dataset.mode = mode;
     view.dataset.hover = '';
     closeBranchMenu();
-    $('#btn-prune').classList.toggle('active', mode === 'prune');
-    $('#btn-wire').classList.toggle('active', mode === 'wire');
-    $('#btn-trim').classList.toggle('active', mode === 'trim');
+    syncDock();
     updateStatus();
   }
 
@@ -1128,6 +1178,9 @@
 
   function tick() {
     const now = Date.now();
+    // Followers do not advance sim-time — the leader owns the monotonic log and
+    // broadcasts growth to us. We just keep rendering the mirrored tree.
+    if (!isLeader) { lastTick = now; lastEnv = B.Weather.env(new Date()); return; }
     const dtSec = clamp((now - lastTick) / 1000, 0, 72 * 3600);
     lastTick = now;
     if (dtSec > 3600) offlineAdvance(dtSec);
@@ -1160,6 +1213,10 @@
   // Everything else here is cosmetic or non-canonical local scheduling state.
   function save() {
     if (VIEWER) return;   // a shared bonsai never touches this browser's save
+    if (!isMinted()) return;   // demo trees live only in memory — mint to keep
+    // Followers never write the shared log — the leader owns it (their edits were
+    // forwarded via appendEvent). They may still update cosmetics only in memory.
+    if (!isLeader && !applyingRemote) return;
     lastSaveAt = Date.now();
     dna.t = S.simT;
     store.set(KEY, JSON.stringify({
@@ -1172,7 +1229,80 @@
       wx: B.Weather.serialize(),
       nft: nft || undefined,
       atts: atts.length ? atts : undefined,
+      bg: bg !== 'classic' ? bg : undefined,
     }));
+    if (!applyingRemote) syncPost({ type: 'saved', from: CLIENT_ID });   // tell peers to re-read
+  }
+
+  // ---------- same-origin live sync
+  // Browser tab and desktop wallpaper (same origin) share the one KEY. Only the
+  // LEADER advances sim-time and writes the log; FOLLOWERS mirror it and forward the
+  // user's care actions to the leader, so the monotonic event log stays single-writer.
+  function syncPost(msg) { if (syncCh) { try { syncCh.postMessage(msg); } catch (e) {} } }
+
+  // Re-read the shared save and rebuild the live tree from it (a peer changed it).
+  function applyRemoteSave() {
+    let data = null;
+    try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { return; }
+    if (!data || !data.dna || data.dna.v !== 2) return;
+    applyingRemote = true;
+    try {
+      dna = data.dna;
+      rebuildFromLog();                 // S = SIM.replay(dna) + updateAll()
+      pendingSec = typeof data.pendingSec === 'number' ? data.pendingSec : 0;
+      nft = data.nft || nft;
+      atts = Array.isArray(data.atts) ? data.atts : atts;
+      if (typeof data.bg === 'string' || data.bg === undefined) setBackground(data.bg || 'classic', false);
+    } finally { applyingRemote = false; }
+  }
+
+  // Presence-based leadership: every context defaults to leader and pings peers. When
+  // two are live, the one with the lexicographically-smaller CLIENT_ID leads; the other
+  // steps down. A peer that stops pinging (closed) is forgotten, so leadership recovers
+  // automatically. No localStorage record → no stale-leader hazard across reloads.
+  const peers = new Map();   // id → last-seen ms
+  function refreshLeadership() {
+    const now = Date.now();
+    for (const [id, ts] of peers) if (now - ts > 7000) peers.delete(id);
+    sawPeer = peers.size > 0;
+    let minId = CLIENT_ID;
+    for (const id of peers.keys()) if (id < minId) minId = id;
+    const nowLeader = (minId === CLIENT_ID);
+    if (nowLeader && !isLeader) lastTick = Date.now();   // resuming time: don't fold the gap
+    isLeader = nowLeader;
+  }
+
+  function initSync() {
+    if (VIEWER || typeof BroadcastChannel !== 'function') return;
+    try { syncCh = new BroadcastChannel('pixel-bonsai'); } catch (e) { syncCh = null; return; }
+    syncCh.onmessage = (e) => {
+      const m = e.data || {};
+      if (m.from === CLIENT_ID) return;
+      if (m.type === 'ping' || m.type === 'hello') {
+        peers.set(m.from, Date.now());
+        if (m.type === 'hello') syncPost({ type: 'ping', from: CLIENT_ID });   // announce back
+        refreshLeadership();
+      } else if (m.type === 'saved') { peers.set(m.from, Date.now()); applyRemoteSave(); }
+      else if (m.type === 'action' && isLeader) { applyForwardedAction(m.ev); }
+    };
+    // storage events fire in OTHER same-origin contexts even without BroadcastChannel
+    window.addEventListener('storage', (e) => {
+      if (e.key === KEY) { sawPeer = true; applyRemoteSave(); }
+    });
+    syncPost({ type: 'hello', from: CLIENT_ID });
+    setInterval(() => { syncPost({ type: 'ping', from: CLIENT_ID }); refreshLeadership(); }, 2500);
+  }
+
+  // The leader applies a care action forwarded from a follower, through the SAME
+  // path a local action uses, so it is logged and saved exactly once.
+  function applyForwardedAction(ev) {
+    if (!ev || guardViewer() || res.dead) return;
+    const out = SIM.applyAction(S, ev);
+    if (!out || !out.ok) return;
+    appendEvent(ev);
+    statsCache = tree.stats();
+    updateAll();
+    save();   // broadcasts {saved} → the follower mirrors it
   }
 
   // ---------- timestamp notary (opportunistic — the game never blocks on it)
@@ -1451,38 +1581,99 @@
     }
   }
 
-  // ---------- sky / day-night
+  // ---------- sky / day-night / backgrounds
+  // The default living sky: a time-of-day color ramp, tinted by weather.
   const SKY_STOPS = [
     [0, 0x10141f], [5, 0x10141f], [6.5, 0xc9909a], [8, 0xf4f1ea],
     [17.5, 0xf4f1ea], [19, 0xf0cfa6], [20.5, 0x4a4a6e], [21.5, 0x10141f], [24, 0x10141f],
   ];
+  // Selectable backgrounds. `ramp` (a SKY_STOPS-shaped array) or `flat` (a fixed hex);
+  // `weather` gates the storm-gray blend; `stars` = 'auto' | 'always' | 'never'.
+  const BACKGROUNDS = {
+    classic:     { label: '🌤 Classic', ramp: SKY_STOPS, weather: true,  stars: 'auto' },
+    'night-sky': { label: '🌌 Night sky', flat: 0x0b1020, weather: false, stars: 'always' },
+    'sakura':    { label: '🌸 Sakura', flat: 0xf3d7e2, weather: false, stars: 'never' },
+    'zen-mist':  { label: '🌫 Zen mist', flat: 0xd8dee4, weather: false, stars: 'never' },
+    'dusk':      { label: '🌇 Dusk', flat: 0x40324f, weather: false, stars: 'auto' },
+    'void':      { label: '⬛ Void', flat: 0x05070a, weather: false, stars: 'never' },
+  };
+  function bgDef() { return BACKGROUNDS[bg] || BACKGROUNDS.classic; }
+
+  // Apply a background preset. `persist` writes+syncs it; false = just apply (boot/remote).
+  function setBackground(key, persist) {
+    if (!BACKGROUNDS[key]) key = 'classic';
+    bg = key;
+    document.querySelectorAll('#bg-picker .bg-swatch').forEach((el) => {
+      el.classList.toggle('active', el.dataset.bg === key);
+    });
+    if (persist) save();
+  }
+
   let cSky, cTmp, cGray, nightClass = false;
+
+  function rampAt(ramp, h) {
+    let i = 0;
+    while (i < ramp.length - 1 && ramp[i + 1][0] < h) i++;
+    const [h0, c0] = ramp[i], [h1, c1] = ramp[Math.min(i + 1, ramp.length - 1)];
+    const t = h1 === h0 ? 0 : clamp((h - h0) / (h1 - h0), 0, 1);
+    return cSky.setHex(c0).lerp(cTmp.setHex(c1), t);
+  }
 
   function skyFrame(tms) {
     if (!cSky) { cSky = new THREE.Color(); cTmp = new THREE.Color(); cGray = new THREE.Color(); }
     const now = new Date();
     const h = now.getHours() + now.getMinutes() / 60;
-    let i = 0;
-    while (i < SKY_STOPS.length - 1 && SKY_STOPS[i + 1][0] < h) i++;
-    const [h0, c0] = SKY_STOPS[i], [h1, c1] = SKY_STOPS[Math.min(i + 1, SKY_STOPS.length - 1)];
-    const t = h1 === h0 ? 0 : clamp((h - h0) / (h1 - h0), 0, 1);
-    cSky.setHex(c0).lerp(cTmp.setHex(c1), t);
+    const def = bgDef();
+    if (def.ramp) rampAt(def.ramp, h);
+    else cSky.setHex(def.flat);
 
     const env = lastEnv;
-    if (env && env.ok) {
+    if (def.weather && env && env.ok) {
       const grayAmt = { clouds: 0.3, fog: 0.5, rain: 0.42, storm: 0.55, snow: 0.28 }[env.kind] || 0;
       if (grayAmt) cSky.lerp(cGray.setHex(env.night ? 0x171c26 : 0xb9bec6), grayAmt);
     }
     if (previewTree) cSky.lerp(cGray.setHex(0xd9c8ec), 0.28);   // dreamy tint for visions
     renderer.setClearColor(cSky);
 
-    const night = env ? env.night : (h < 6.5 || h >= 20);
-    const starTarget = night && (!env || env.kind === 'clear' || env.kind === 'none') ? 0.5 + 0.18 * Math.sin(tms / 900) : 0;
+    const clearNight = env ? env.night : (h < 6.5 || h >= 20);
+    let starTarget = 0;
+    if (def.stars === 'always') starTarget = 0.5 + 0.18 * Math.sin(tms / 900);
+    else if (def.stars === 'auto') starTarget = clearNight && (!env || env.kind === 'clear' || env.kind === 'none') ? 0.5 + 0.18 * Math.sin(tms / 900) : 0;
     starMat.opacity += (starTarget - starMat.opacity) * 0.04;
-    if (night !== nightClass) {
-      nightClass = night;
-      document.body.classList.toggle('night', night);
+    // Night CSS class still follows real time-of-day (button/gutter theming), not the preset.
+    if (clearNight !== nightClass) {
+      nightClass = clearNight;
+      document.body.classList.toggle('night', clearNight);
     }
+  }
+
+  // ---------- wallpaper care dock (desktop: tend the tree without the full toolbar)
+  // water/mist/feed fire the same care actions as tapping the scene; prune/wire/trim
+  // enter their mode, then a click on a branch/pad does the work via the usual path.
+  const wpDock = $('#wp-dock');
+  function wireDock() {
+    if (!wpDock || !WALLPAPER) return;
+    $('#wp-water').onclick = () => { lastInteract = performance.now(); doWater(); };
+    $('#wp-mist').onclick = () => { lastInteract = performance.now(); doMist(); };
+    $('#wp-feed').onclick = () => { lastInteract = performance.now(); doFeed(); };
+    $('#wp-prune').onclick = () => { lastInteract = performance.now(); setMode('prune'); };
+    $('#wp-wire').onclick = () => { lastInteract = performance.now(); setMode('wire'); };
+    $('#wp-trim').onclick = () => { lastInteract = performance.now(); setMode('trim'); };
+    $('#wp-ff').onclick = () => { lastInteract = performance.now(); doTimeLapse(); };
+    wpDock.classList.remove('hidden');
+    // any pointer movement over the desktop wakes the dock; it fades out when idle
+    // (see the frame loop). Kept separate from lastInteract so the idle turntable is
+    // still governed only by real interaction, not by the cursor passing over.
+    window.addEventListener('pointermove', () => { dockWake = performance.now(); }, { passive: true });
+    dockWake = performance.now();
+    syncDock();
+  }
+  // reflect the active tool so the desktop shows which mode is armed
+  function syncDock() {
+    if (!wpDock || wpDock.classList.contains('hidden')) return;
+    $('#wp-prune').classList.toggle('active', mode === 'prune');
+    $('#wp-wire').classList.toggle('active', mode === 'wire');
+    $('#wp-trim').classList.toggle('active', mode === 'trim');
   }
 
   // ---------- UI
@@ -1491,12 +1682,6 @@
       const el = $(id);
       for (let i = 0; i < 10; i++) el.appendChild(document.createElement('i'));
     }
-    $('#btn-water').onclick = doWater;
-    $('#btn-mist').onclick = doMist;
-    $('#btn-feed').onclick = doFeed;
-    $('#btn-prune').onclick = () => setMode('prune');
-    $('#btn-wire').onclick = () => setMode('wire');
-    $('#btn-trim').onclick = () => setMode('trim');
     $('#bm-cut').onclick = () => {
       const id = branchMenuSeg;
       closeBranchMenu();
@@ -1561,6 +1746,21 @@
       }
     };
     $('#btn-mint').onclick = mintOrUpdate;
+    $('#btn-keep').onclick = mintOrUpdate;   // same flow — mint converts this demo into a kept, owned NFT
+    $('#btn-wallpaper').onclick = offerWallpaper;
+
+    // Build the background swatches once.
+    const picker = $('#bg-picker');
+    if (picker && !picker.childElementCount) {
+      for (const key of Object.keys(BACKGROUNDS)) {
+        const b = document.createElement('button');
+        b.className = 'btn small bg-swatch' + (key === bg ? ' active' : '');
+        b.dataset.bg = key;
+        b.textContent = BACKGROUNDS[key].label;
+        b.onclick = () => setBackground(key, true);
+        picker.appendChild(b);
+      }
+    }
     let resetArmed = 0;
     $('#btn-reset').onclick = (e) => {
       if (Date.now() - resetArmed < 3000) {
@@ -1582,7 +1782,38 @@
       : `location: ${st.city || 'unknown'} (${st.lat.toFixed(2)}, ${st.lon.toFixed(2)})`;
     $('#city-results').innerHTML = '';
     renderMintState();
+    renderSyncStatus();
     $('#modal-settings').classList.remove('hidden');
+  }
+
+  function renderSyncStatus() {
+    const el = $('#sync-status'); if (!el) return;
+    if (!isMinted()) { el.textContent = ''; return; }
+    el.textContent = sawPeer
+      ? (isLeader ? '🔗 synced live with your desktop — this window is tending the tree'
+                  : '🔗 synced live — your desktop is tending the tree')
+      : '🖼 on your desktop, the wallpaper syncs live with this page (same site).';
+  }
+
+  // Copy a personalized wallpaper URL carrying THIS tree, so it opens as the same
+  // tree on the desktop. A minted tree syncs live (same-origin); a demo tree isn't
+  // saved and doesn't sync, so its link is a static snapshot at copy time. Reuses
+  // the DNA encoder.
+  async function offerWallpaper() {
+    dna.t = S.simT;
+    try {
+      const code = await SIM.dnaEncode(dna);
+      const base = location.href.split('#')[0].replace(/index\.html$/, '');
+      let url = base + 'wallpaper.html#wallpaper&seed=' + code;
+      if (nft && nft.tokenId) url += '&nft=' + nft.tokenId;
+      await navigator.clipboard.writeText(url);
+      toast(isMinted()
+        ? '🖼 wallpaper link copied! In Plash/Lively (macOS/Windows) add it as a website — your tree lives on your desktop and syncs with this page.'
+        : "🖼 wallpaper link copied! It's a snapshot of your bonsai as it looks now — add it in Plash/Lively as a website. 🌱 It won't sync or keep growing until you 🪙 KEEP (mint) it.",
+        { ms: 9000 });
+    } catch (e) {
+      toast('🖼 could not copy the link (' + (e && e.message || e) + ')');
+    }
   }
 
   // ---------- optional NFT mint (Base Sepolia testnet, lazy — see js/chain.js)
@@ -1601,25 +1832,35 @@
   }
 
   function renderMintState() {
-    const btn = $('#btn-mint'), status = $('#mint-status');
+    const btn = $('#btn-mint'), status = $('#mint-status'), keep = $('#btn-keep');
     if (!btn) return;
-    if (nft) {
+    if (isMinted()) {
       btn.textContent = '⛓ UPDATE ON-CHAIN';
       status.classList.remove('hidden');
-      status.innerHTML = `🪙 minted · Pixel Bonsai token #${nft.tokenId} · ` +
+      status.innerHTML = `🪙 kept · Pixel Bonsai token #${nft.tokenId} · ` +
         `<a href="https://sepolia.basescan.org/tx/${nft.txHash}" target="_blank" rel="noopener">tx</a>` +
         ` · last on-chain age ${Math.floor((nft.simT || 0) / 86400)}d`;
+      if (keep) keep.classList.add('hidden');   // already kept — no CTA needed
     } else {
-      btn.textContent = '🪙 MINT NFT';
-      status.classList.add('hidden');
-      status.textContent = '';
+      btn.textContent = '🪙 KEEP THIS BONSAI';
+      status.classList.remove('hidden');
+      status.textContent = '🌱 demo — not saved yet · mint to keep it forever';
+      // The KEEP CTA only makes sense once the tree has some progress worth keeping.
+      if (keep) keep.classList.toggle('hidden', !(dna && dna.e && dna.e.length > 0));
+      // One-shot nudge at the first real attachment moment (first blossom).
+      if (!keepNudged && !VIEWER && statsCache && statsCache.blossoms > 0) {
+        keepNudged = true;
+        toast('🌸 your bonsai is blooming — 🪙 KEEP it to mint & own it forever', {
+          ms: 9000, action: { label: '🪙 KEEP', fn: mintOrUpdate },
+        });
+      }
     }
   }
 
   async function mintOrUpdate() {
     if (guardViewer()) return;
-    const btn = $('#btn-mint');
-    btn.disabled = true;
+    const btns = [$('#btn-mint'), $('#btn-keep')].filter(Boolean);
+    btns.forEach((b) => { b.disabled = true; });
     try {
       const C = await loadChain();
       if (!C.CFG.CONTRACT) {
@@ -1627,7 +1868,7 @@
         return;
       }
       if (!C.hasWallet()) {
-        toast('🪙 minting is optional and needs a wallet extension (MetaMask) — playing never does', { ms: 8000 });
+        toast('🪙 to keep your bonsai you need a browser wallet (MetaMask) — the demo plays without one', { ms: 8000 });
         return;
       }
       await C.loadEthers();
@@ -1651,11 +1892,12 @@
           toast('🪙 confirm the mint in your wallet…', { ms: 12000 });
           const r = await C.mint({ treeId, dnaCode: code, simT: simTNow });
           nft = { tokenId: r.tokenId, contract: C.CFG.CONTRACT, chain: C.CFG.CHAIN_ID, txHash: r.txHash, simT: simTNow, ts: Date.now() };
-          toast(`🪙 minted! Pixel Bonsai token #${r.tokenId} is alive on Base Sepolia`, { ms: 8000 });
+          toast(`🪙 kept! Pixel Bonsai token #${r.tokenId} is now yours on Base Sepolia`, { ms: 8000 });
         }
       }
-      save();
+      save();              // now that it's minted, this actually persists the tree
       renderMintState();
+      updateStatus();      // clear the "demo — not saved" hint
     } catch (e) {
       if (e && (e.code === 4001 || e.code === 'ACTION_REJECTED')) {
         toast('🪙 no worries — nothing was sent');
@@ -1663,7 +1905,7 @@
         toast('🪙 ' + (((e && (e.shortMessage || e.message)) || 'something went wrong') + '').slice(0, 120), { ms: 7000 });
       }
     } finally {
-      btn.disabled = false;
+      btns.forEach((b) => { b.disabled = false; });
     }
   }
 
@@ -1732,6 +1974,10 @@
     else if (mode === 'trim') txt = '🍃 click a blossom pad to pinch it — esc to exit';
     else if (mode === 'wire') txt = '➰ click a branch, drag to bend · dbl-click unwires · esc exits';
     else txt = careNote() || (lastEnv && lastEnv.note) || 'drag the pot 🌀 · rake the sand · tap: blossoms=mist, air=water, pebbles=feed, branch=✂️➰';
+    // Demo trees aren't saved — keep a gentle, persistent reminder in the status line.
+    if (!VIEWER && !previewTree && !isMinted() && dna && dna.e && dna.e.length > 0) {
+      txt = '🌱 demo — not saved · 🪙 KEEP to mint & own it · ' + txt;
+    }
     if (statusEl.textContent !== txt) statusEl.textContent = txt;
   }
 
@@ -1779,6 +2025,48 @@
     updateStatus();
     updateChips();
     updateFacts();
+    renderMintState();   // keep the KEEP/demo CTA in sync as the tree grows
+  }
+
+  // ---------- cosmetic spring-back animation (unwire)
+  // The canonical model already jumps to the sprung-back pose (see SIM op 'u');
+  // this replays that single rigid subtree rotation visually — the branch swings
+  // from its bent pose to rest with a slight overshoot. Purely display: it only
+  // mutates seg.dir + tree.rev (exactly how bends do), and the final frame lands
+  // on the same rotation the sim produced, so replay/save stay authoritative.
+  let springAnim = null;   // {segId, axis, total, startDirs:Map, t, dur}
+
+  // ease-out-back: overshoots above 1 mid-flight, resolves to exactly 1 at k=1.
+  function springEase(k) { const c1 = 1.70158, c3 = c1 + 1, p = k - 1; return 1 + c3 * p * p * p + c1 * p * p; }
+
+  // Place the subtree at its captured pre-spring dirs rotated by `ang`, then rebuild.
+  function applySpringPose(ang) {
+    const seg = tree.segs.get(springAnim.segId);
+    if (!seg) { springAnim = null; return; }
+    const V = B.Vec;
+    const walk = (s) => {
+      const d0 = springAnim.startDirs.get(s.id);
+      if (d0) s.dir = V.norm(V.rotate(d0, springAnim.axis, ang));
+      for (const c of s.children) walk(c);
+    };
+    walk(seg);
+    tree.recompute();
+    tree.rev++;   // forces syncTree() to rebuild this frame
+  }
+
+  function startSpringAnim(segId, axis, total, startDirs) {
+    if (springAnim) applySpringPose(springAnim.total);   // finalize any in-flight spring
+    springAnim = { segId, axis, total, startDirs, t: 0, dur: 0.45 };
+    applySpringPose(0);   // show the bent pose immediately, then swing from it
+  }
+
+  function stepSpringAnim(dt) {
+    if (!springAnim) return;
+    if (previewTree) { springAnim = null; return; }   // vision replaces the live tree — drop it
+    springAnim.t += dt;
+    const k = Math.min(1, springAnim.t / springAnim.dur);
+    applySpringPose(springAnim.total * springEase(k));
+    if (k >= 1) { applySpringPose(springAnim.total); springAnim = null; }   // land exactly on target
   }
 
   // ---------- main loop
@@ -1793,10 +2081,17 @@
       if (Math.abs(thetaVel) < 0.0001) thetaVel = 0;
     }
     if (WALLPAPER && !drag && tms - lastInteract > 30000) theta += dt * 0.02;  // idle: slow turntable
+    if (wpDock && !wpDock.classList.contains('hidden')) {
+      // fade the care dock out after ~4s of no cursor movement — but keep it up while a
+      // tool is armed or a drag is in flight, so you never lose the active-mode cue mid-tend
+      const awake = drag || mode !== 'view' || tms - dockWake < 4000;
+      wpDock.classList.toggle('dimmed', !awake);
+    }
     rotGroup.rotation.y = theta;
     const swayA = lastEnv ? lastEnv.sway : 0.3;
     treeMesh.rotation.z = Math.sin(tms / 625) * 0.012 * swayA;
     treeMesh.rotation.x = Math.sin(tms / 900 + 2) * 0.008 * swayA;
+    stepSpringAnim(dt);
     syncTree();
     syncPot();
     syncDecals();
@@ -1814,6 +2109,11 @@
       get viewer() { return VIEWER; },
       get nft() { return nft; },
       get atts() { return atts; },
+      get bg() { return bg; },
+      get isLeader() { return isLeader; },
+      get sawPeer() { return sawPeer; },
+      setBg: (k) => setBackground(k, true),
+      get clearColor() { return renderer ? '#' + renderer.getClearColor(new THREE.Color()).getHexString() : null; },
       dna: () => { dna.t = S.simT; return JSON.parse(SIM.canonical(dna)); },
       dnaCode: () => { dna.t = S.simT; return SIM.dnaEncode(dna); },
       verifyReplay: () => {   // replay the envelope and diff it against the live state
@@ -1838,6 +2138,13 @@
         updateAll();
       },
       setPreview, toggleFuture, applyZoom,
+      // care hooks: the scene is the interface (tap air/blossoms/pebbles/branch), so
+      // there are no care buttons to click — tests and the wallpaper dock drive these.
+      water: () => doWater(),
+      mist: () => doMist(),
+      feed: () => doFeed(),
+      setMode: (m) => setMode(m),
+      timeLapse: () => doTimeLapse(),
       get env() { return lastEnv; },
       get mode() { return mode; },
       get zoom() { return zoom; },
@@ -1858,6 +2165,17 @@
         let s = 0;
         for (let i = 0; i < d.length; i += 97) s = (s + d[i]) % 1e9;
         return s;
+      },
+      isMinted: () => isMinted(),
+      // Test hook: simulate a successful KEEP/mint without a wallet, so the
+      // demo→persist path can be exercised headlessly. Mirrors what mintOrUpdate sets.
+      keep: (tokenId) => {
+        if (VIEWER) return null;
+        nft = { tokenId: tokenId || 1, contract: 'test', chain: 0, txHash: 'test', simT: Math.floor(S.simT), ts: Date.now() };
+        save();
+        renderMintState();
+        updateStatus();
+        return nft;
       },
     };
   }
@@ -1959,6 +2277,7 @@
       decals = Array.isArray(data.decals) ? data.decals : [];
       nft = data.nft || null;
       atts = Array.isArray(data.atts) ? data.atts : [];
+      if (typeof data.bg === 'string') bg = data.bg;
     }
 
     try { setupScene(); } catch (e) {
@@ -1997,6 +2316,7 @@
     }
     buildUI();
     bindInput();
+    wireDock();
     lastEnv = B.Weather.env(new Date());
 
     if (data && data.ts) {
@@ -2029,13 +2349,56 @@
     };
     B.Weather.init();
 
+    setBackground(bg, false);   // apply any restored background preset
     updateAll();
     save();
     lastTick = Date.now();
     setInterval(tick, 1000);
     requestAnimationFrame(frame);
+    initSync();   // same-origin live sync with a peer (browser ⇄ wallpaper)
+
+    // Safety net: a tree with real history but no local mint record might still be
+    // owned on-chain (e.g. localStorage was cleared). Ask the public RPC — no wallet —
+    // and rehydrate `nft` so the player keeps ownership without re-minting.
+    if (!isMinted() && dna.e && dna.e.length > 0) {
+      recoverMintFromChain();
+    }
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  async function recoverMintFromChain() {
+    try {
+      const C = await loadChain();
+      if (!C.CFG.CONTRACT) return;
+      const existing = await C.readTokenOfTree(C.treeIdOf(dna.seed, dna.g));
+      if (existing && !isMinted()) {
+        nft = { tokenId: existing, contract: C.CFG.CONTRACT, chain: C.CFG.CHAIN_ID,
+                txHash: '', simT: Math.floor(S.simT), ts: Date.now() };
+        save();
+        renderMintState();
+        updateStatus();
+        toast(`🪙 welcome back — this bonsai is yours, token #${existing}`);
+      }
+    } catch (e) { /* network optional — stays a demo until minted */ }
+  }
+
+  // One-time seed of a fresh wallpaper install from #seed=<dna>: decode the tree
+  // and stash it under KEY so the normal boot() load path picks it up. Runs only in
+  // wallpaper mode, only when there is no existing save (so it never clobbers a tree
+  // that has already started growing/syncing here).
+  async function seedFromHash() {
+    if (!SEED_HASH) return;
+    try {
+      if (store.get(KEY)) return;                 // this install already has a tree
+      const env = await SIM.dnaDecode(SEED_HASH[1]);
+      if (!env || env.v !== 2 || typeof env.g !== 'number') return;
+      const seededNft = SEED_NFT
+        ? { tokenId: parseInt(SEED_NFT[1], 10), contract: '', chain: 0, txHash: '', simT: Math.floor(env.t || 0), ts: Date.now() }
+        : null;
+      store.set(KEY, JSON.stringify({ v: 2, ts: Date.now(), pendingSec: 0, dna: env, nft: seededNft || undefined }));
+    } catch (e) { /* bad seed → boot() just starts a fresh tree */ }
+  }
+
+  async function start() { await seedFromHash(); boot(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
 })();

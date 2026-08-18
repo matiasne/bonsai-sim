@@ -62,8 +62,19 @@ With input enabled you can do **everything right on the desktop**: drag the pot,
 water/mist/feed — and tap a branch for the ✂️ cut / ➰ wire menu (cut offers a brief UNDO;
 after wiring, drag the branch to bend, then tap empty space to put the tool away).
 
-Notes: each wallpaper app has its own browser storage, so the wallpaper keeps **its own bonsai**
-(separate from your browser's). Everything works offline except the first three.js load and weather.
+**Same tree, live-synced:** once you **keep** (mint) a bonsai, open ⚙ → *🖼 PUT ON MY
+DESKTOP* to copy a personalized wallpaper link that carries your tree. When the wallpaper
+and your browser load from the **same site** (both `mydigitalbonsai.com`, or both the same
+local folder), they share one living tree in real time — water or prune it on the desktop
+and the browser reflects it instantly, and vice-versa. One context advances time (leader);
+the other mirrors and forwards your care to it, so the tree never forks. If a wallpaper app
+sandboxes its storage (so it can't be shared), it simply keeps its own bonsai and the
+settings panel says so.
+
+**Backgrounds:** ⚙ → *background* offers scenes (Classic day/night, Night sky, Sakura,
+Zen mist, Dusk, Void). Your choice is saved and syncs with the wallpaper like everything else.
+
+Everything works offline except the first three.js load and weather.
 
 ## Real seasons 🌸🍃🍂❄
 
@@ -123,17 +134,22 @@ The notary is the game's only backend, it holds no data (stateless signing), and
 still works offline — attestations are opportunistic. Key rotation: append the new public key
 to `PUBKEYS` (old attestations stay verifiable) and swap the `NOTARY_KEY` env in Vercel.
 
-## 🪙 Optional NFT — a living token (testnet)
+## 🪙 Keep your bonsai — a living NFT (testnet)
 
-The bonsai can be minted as a **living NFT** on **Base Sepolia** (a free test network):
+Every bonsai starts as a **free demo**: fully playable, but it lives only in your
+browser's memory. To **keep** a tree — save it across reloads and truly own it — you
+mint it as a **living NFT** on **Base Sepolia** (a free test network). Grow one you love,
+then hit 🪙 **KEEP**.
 
-- **Playing never needs a wallet.** Minting is a strictly optional button (⚙ → 🪙 MINT NFT);
-  the wallet-handling code (`js/chain.js` + ethers from a CDN) loads only if you click it.
+- **The demo never needs a wallet.** You can play, prune, and time-lapse without one; the
+  wallet code (`js/chain.js` + ethers from a CDN) loads only when you KEEP (or to recover
+  a tree you already own on boot). An un-kept demo tree is discarded when you close the tab
+  (you're warned first).
 - The token stores the tree's **entire DNA on-chain** — the same envelope a DNA link carries.
   Its metadata is generated on-chain too, and the `animation_url` opens this site's read-only
   viewer, so marketplaces (e.g. OpenSea testnet) render the *actual living tree*, not a picture.
-- It's **alive**: after minting, the button becomes ⛓ UPDATE ON-CHAIN — push your tree's latest
-  history whenever you like. Sim-time may never rewind, each tree can only be minted once
+- It's **alive**: after you keep it, the button becomes ⛓ UPDATE ON-CHAIN — push your tree's
+  latest history whenever you like. Sim-time may never rewind, each tree can only be minted once
   (`treeId = keccak(seed:genesis)`), and yes: a tree that dies can be immortalized dead.
 - To try it you need the MetaMask extension, a **fresh test account**, and free Base Sepolia ETH
   from a faucet. The contract lives in [`contracts/`](contracts/) (Foundry + OpenZeppelin,
