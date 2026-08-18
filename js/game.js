@@ -112,7 +112,7 @@
 
   // ---------- state
   let S = null;       // deterministic sim state (B.Sim): tree, res, gp, burnH, soggy, trimBoost, dyingH, simT
-  let dna = null;     // the envelope {v:2, seed, g, s, t, e, snap?} — S is always replay(dna) + live steps
+  let dna = null;     // the envelope {v, seed, g, s, t, e, snap?} — S is always replay(dna) + live steps (v2 native math, v3 pinned)
   let nft = null;     // minted-token record {tokenId, contract, chain, txHash, simT, ts} — save cosmetics, NEVER in the envelope
   // A tree is "kept" (persisted + owned) only once it is minted. Until then it is a
   // free demo that lives only in memory — see save() and the KEEP button.
@@ -1120,7 +1120,7 @@
     drawStarterPattern();
     sandTexture.needsUpdate = true;
     dna = {
-      v: 2,
+      v: SIM.ENV_V,
       seed: (Math.random() * 0xffffffff) >>> 0,
       g: Date.now(),
       s: B.Weather.st.lat !== null && B.Weather.st.lat < 0 ? 1 : 0,
@@ -1247,7 +1247,7 @@
   function applyRemoteSave() {
     let data = null;
     try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { return; }
-    if (!data || !data.dna || data.dna.v !== 2) return;
+    if (!data || !data.dna || (data.dna.v !== 2 && data.dna.v !== 3)) return;
     applyingRemote = true;
     try {
       dna = data.dna;
@@ -2189,7 +2189,7 @@
   async function bootViewer(code) {
     let env = null;
     try { env = await SIM.dnaDecode(code); } catch (e) { env = null; }
-    if (!env || env.v !== 2 || typeof env.g !== 'number') {
+    if (!env || (env.v !== 2 && env.v !== 3) || typeof env.g !== 'number') {
       return fatal('🧬 this DNA link is damaged or from a newer version — ask for a fresh one.');
     }
     dna = env;
@@ -2261,13 +2261,13 @@
     let data = null;
     try { data = JSON.parse(store.get(KEY) || 'null'); } catch (e) { data = null; }
     if (data && data.v === 1) data.dna = migrateV1(data);
-    if (data && (!data.dna || data.dna.v !== 2)) data = null;
+    if (data && (!data.dna || (data.dna.v !== 2 && data.dna.v !== 3))) data = null;
 
     if (data) {
       dna = data.dna;
       B.Weather.hydrate(data.wx);
     } else {
-      dna = { v: 2, seed: (Math.random() * 0xffffffff) >>> 0, g: Date.now(), s: 0, t: 0, e: [] };
+      dna = { v: SIM.ENV_V, seed: (Math.random() * 0xffffffff) >>> 0, g: Date.now(), s: 0, t: 0, e: [] };
     }
     // Boot IS a replay — the envelope is the only authority on the tree.
     S = SIM.replay(dna);
@@ -2394,7 +2394,7 @@
     try {
       if (store.get(KEY)) return;                 // this install already has a tree
       const env = await SIM.dnaDecode(SEED_HASH[1]);
-      if (!env || env.v !== 2 || typeof env.g !== 'number') return;
+      if (!env || (env.v !== 2 && env.v !== 3) || typeof env.g !== 'number') return;
       const seededNft = SEED_NFT
         ? { tokenId: parseInt(SEED_NFT[1], 10), contract: '', chain: 0, txHash: '', simT: Math.floor(env.t || 0), ts: Date.now() }
         : null;

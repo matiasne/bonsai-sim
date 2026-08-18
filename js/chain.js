@@ -1,4 +1,4 @@
-/* Pixel Bonsai — on-chain ownership layer (Base Sepolia testnet).
+/* Pixel Bonsai — on-chain ownership layer (Base).
    The free demo never touches this file, never loads ethers, never needs a
    wallet — it is lazily loaded only when the user KEEPs (mints) their tree, or
    to recover an already-owned tree on boot. Minting is what makes a demo tree
@@ -7,20 +7,43 @@
   'use strict';
   const B = root.Bonsai = root.Bonsai || {};
 
-  const CFG = {
-    // BonsaiTree.sol on Base Sepolia — see contracts/broadcast/ for the record.
-    CONTRACT: '0x4e8445fb48f375b3315ccf07f2a14E35De6f7C02',
-    CHAIN_ID: 84532,
-    CHAIN_ID_HEX: '0x14a34',
-    CHAIN_PARAMS: {
-      chainId: '0x14a34',
-      chainName: 'Base Sepolia',
-      nativeCurrency: { name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 },
-      rpcUrls: ['https://sepolia.base.org'],
-      blockExplorerUrls: ['https://sepolia.basescan.org'],
+  // Both deployment targets. ACTIVE picks which one the game talks to; the
+  // saved nft record does NOT carry the network, so flipping ACTIVE orphans
+  // testnet mints on purpose (they were free play-money tokens).
+  const NETWORKS = {
+    baseSepolia: {
+      // BonsaiTree.sol on Base Sepolia — see contracts/broadcast/ for the record.
+      CONTRACT: '0x4e8445fb48f375b3315ccf07f2a14E35De6f7C02',
+      CHAIN_ID: 84532,
+      CHAIN_ID_HEX: '0x14a34',
+      CHAIN_PARAMS: {
+        chainId: '0x14a34',
+        chainName: 'Base Sepolia',
+        nativeCurrency: { name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: ['https://sepolia.base.org'],
+        blockExplorerUrls: ['https://sepolia.basescan.org'],
+      },
+      PUBLIC_RPC: 'https://sepolia.base.org',
+      EXPLORER: 'https://sepolia.basescan.org',
     },
-    PUBLIC_RPC: 'https://sepolia.base.org',
-    EXPLORER: 'https://sepolia.basescan.org',
+    base: {
+      CONTRACT: '',   // ← paste the address printed by `forge script … --rpc-url base --broadcast`
+      CHAIN_ID: 8453,
+      CHAIN_ID_HEX: '0x2105',
+      CHAIN_PARAMS: {
+        chainId: '0x2105',
+        chainName: 'Base',
+        nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+        rpcUrls: ['https://mainnet.base.org'],
+        blockExplorerUrls: ['https://basescan.org'],
+      },
+      PUBLIC_RPC: 'https://mainnet.base.org',
+      EXPLORER: 'https://basescan.org',
+    },
+  };
+  const ACTIVE = 'baseSepolia';   // flip to 'base' once the mainnet contract is deployed
+
+  const CFG = Object.assign({
     // ethers v6 UMD, CDN + fallback (same pattern as three.js in index.html)
     ETHERS_URLS: [
       'https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js',
@@ -33,8 +56,10 @@
       'function dnaOf(uint256 tokenId) view returns (string)',
       'function ownerOf(uint256 tokenId) view returns (address)',
       'function simT(uint256 tokenId) view returns (uint64)',
+      'function lockUpdates(uint256 tokenId, uint64 until)',
+      'function updatesLockedUntil(uint256 tokenId) view returns (uint64)',
     ],
-  };
+  }, NETWORKS[ACTIVE]);
 
   // keccak topic0 of ERC-721 Transfer(address,address,uint256)
   const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -45,6 +70,8 @@
 
   const Chain = {
     CFG,
+    NETWORKS,
+    ACTIVE,
 
     hasWallet() { return typeof root.ethereum !== 'undefined' && !!root.ethereum; },
 
@@ -157,7 +184,7 @@
       if (!chainDnaCode) return false;
       try {
         const onChain = await B.Sim.dnaDecode(chainDnaCode);
-        return !!onChain && onChain.v === 2 &&
+        return !!onChain && (onChain.v === 2 || onChain.v === 3) &&
           (onChain.seed >>> 0) === (envelope.seed >>> 0) && onChain.g === envelope.g;
       } catch (e) { return false; }
     },

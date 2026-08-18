@@ -4,6 +4,7 @@
 const path = require('path');
 const assert = require('assert');
 
+require(path.join(__dirname, '..', 'js', 'fmath.js'));
 require(path.join(__dirname, '..', 'js', 'tree.js'));
 require(path.join(__dirname, '..', 'js', 'sim.js'));
 require(path.join(__dirname, '..', 'js', 'voxels.js'));
@@ -240,6 +241,11 @@ function simSnap(st) {
     soggy: st.soggy, trim: st.trimBoost, dying: st.dyingH, simT: st.simT,
   });
 }
+function fnv(s) {   // tiny deterministic content hash for golden-replay checks
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
 function careFor(st) {   // keep the tree alive without touching the RNG stream
   const r = st.res;
   if (r.water < 45) r.water = Math.min(100, r.water + 35);
@@ -289,8 +295,8 @@ console.log('event log + replay (the envelope IS the tree)');
 {
   // a scripted "live session": time passes, the player waters/feeds/prunes/wires,
   // every action logged exactly the way game.js logs it
-  const env2 = { v: 2, seed: 1234, g: G0, s: 0, t: 0, e: [] };
-  const live = SIM.newState({ seed: env2.seed, g: env2.g });
+  const env2 = { v: SIM.ENV_V, seed: 1234, g: G0, s: 0, t: 0, e: [] };
+  const live = SIM.newState({ seed: env2.seed, g: env2.g });   // defaults to ENV_V — must match the envelope
   const act = (ev) => { const out = SIM.applyAction(live, ev); if (out.ok) env2.e.push(ev); return out; };
   const passTime = (sec, off) => {
     if (off) env2.e.push(['O', live.simT, sec]);
@@ -324,13 +330,17 @@ console.log('event log + replay (the envelope IS the tree)');
   const replayed = SIM.replay(env2);
   ok(simSnap(replayed) === simSnap(live), 'replay(log) ≡ the live session, bit for bit');
   ok(replayed.tree.rng.state === live.tree.rng.state, 'RNG stream identical after replay');
+  // GOLDEN: v3 replays are pinned cross-engine — this exact fixture must hash to
+  // this exact tree on every JS engine, forever. If this breaks, the sim math
+  // changed: bump Sim.ENV_V and version-gate the change instead.
+  ok(fnv(simSnap(replayed)) === 'eedce656', `v3 golden replay hash (${fnv(simSnap(replayed))})`);
   ok(env2.e.every(ev => ev[1] % SIM.STEP_S === 0 && ev.slice(2).every(Number.isInteger)),
     'every event sits on a quantum boundary with integer args');
 
   // canonical string is byte-stable through a JSON round-trip
   const c1 = SIM.canonical(env2);
   const c2 = SIM.canonical(JSON.parse(c1));
-  ok(c1 === c2 && JSON.parse(c1).v === 2, `canonical envelope is byte-stable (${c1.length} bytes)`);
+  ok(c1 === c2 && JSON.parse(c1).v === SIM.ENV_V, `canonical envelope is byte-stable (${c1.length} bytes)`);
   ok(simSnap(SIM.replay(JSON.parse(c1))) === simSnap(live), 'replay from the canonical string matches too');
 
   // undo-by-rewind: splicing the cut out replays to a tree that never lost the branch
@@ -391,6 +401,36 @@ console.log('event log + replay (the envelope IS the tree)');
   ok(m2.simT === 86400 && m2.tree.ageHours > legacyTree.ageHours, 'the migrated tree kept growing');
 }
 
+console.log('pinned math (v3 envelopes replay bit-identically on every engine)');
+{
+  const FM = B.FMath;
+  FM.legacy = false;
+  let worst = 0;
+  for (let i = 0; i <= 800; i++) {   // trig over the sim's working range
+    const x = -10 + i * 0.025;
+    worst = Math.max(worst, Math.abs(FM.sin(x) - Math.sin(x)), Math.abs(FM.cos(x) - Math.cos(x)));
+  }
+  for (let i = 0; i <= 200; i++) {   // full acos domain (quaternion w, unwire dot)
+    const x = -1 + i * 0.01;
+    worst = Math.max(worst, Math.abs(FM.acos(x) - Math.acos(x)));
+  }
+  for (let i = 1; i <= 200; i++) {   // log10 (trunk girth), exp/pow (trim decay)
+    const x = i * 0.37;
+    worst = Math.max(worst, Math.abs(FM.log10(x) - Math.log10(x)), Math.abs(FM.exp(-x / 40) - Math.exp(-x / 40)));
+  }
+  worst = Math.max(worst, Math.abs(FM.pow(0.98, 0.25) - Math.pow(0.98, 0.25)));
+  ok(worst < 1e-12, `pinned math tracks native within 1e-12 (worst ${worst.toExponential(2)})`);
+  ok(FM.hypot3(3, 4, 12) === 13 && FM.hypot2(3, 4) === 5, 'pinned hypot exact on Pythagorean triples');
+
+  // the version gate: replay flips FMath per envelope, so v2 logs stay bug-for-bug native
+  SIM.replay({ v: 2, seed: 9, g: G0, s: 0, t: 86400, e: [] });
+  ok(FM.legacy === true, 'v2 replay runs legacy native math');
+  SIM.replay({ v: 3, seed: 9, g: G0, s: 0, t: 86400, e: [] });
+  ok(FM.legacy === false, 'v3 replay runs pinned math');
+  const older = { v: 2, seed: 9, g: G0, s: 0, t: 30 * 86400, e: [] };
+  ok(simSnap(SIM.replay(older)) === simSnap(SIM.replay(older)), 'v2 legacy replay still deterministic per-engine');
+}
+
 (async () => {
   console.log('DNA codes (URL-safe, byte-stable, replayable)');
   const env = {
@@ -449,6 +489,15 @@ console.log('event log + replay (the envelope IS the tree)');
     ok(await C.tokenMatches(envB, codeA) === true, 'tokenMatches: same seed+genesis = same tree, even at different ages');
     ok(await C.tokenMatches(envC, codeA) === false, 'tokenMatches: a different seed is a different tree');
     ok(await C.tokenMatches(envA, 'garbage!!') === false, 'tokenMatches: junk on-chain data never matches');
+    const envA3 = { v: 3, seed: 777, g: G0, s: 0, t: 86400, e: [] };
+    ok(await C.tokenMatches(envA3, await SIM.dnaEncode(envA3)) === true,
+      'tokenMatches: v3 pinned-math envelopes verify too (badge regression guard)');
+    // mainnet target is staged and well-formed — flipping ACTIVE is the only deploy-day edit
+    ok(C.ACTIVE === 'baseSepolia' && C.NETWORKS.base.CHAIN_ID === 8453 &&
+      C.NETWORKS.base.CHAIN_PARAMS.chainId === '0x2105' && C.NETWORKS.base.PUBLIC_RPC.includes('mainnet.base.org'),
+      'Base mainnet network staged (Sepolia still active)');
+    ok(C.CFG.ABI.some(f => f.includes('lockUpdates')) && C.CFG.ABI.some(f => f.includes('updatesLockedUntil')),
+      'ABI carries the buyer-protection lock');
   }
 
   console.log('timestamp notary (attest server ↔ offline verifier)');

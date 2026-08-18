@@ -131,6 +131,12 @@ so that a bonsai **is** its history:
 - A tree is exactly `(seed, genesis time, hemisphere, action log)` — an *envelope*. Saves store
   no geometry: every boot **replays the log** and must land on the identical tree, bit for bit
   (`__bonsai.verifyReplay()` checks this live).
+- **Cross-engine pinned math (v3):** JS engines round `sin/cos/pow/…` differently in the last
+  bits, so replay used to be bit-identical only *per engine*. New trees mint **v3 envelopes**,
+  whose growth math runs through [`js/fmath.js`](js/fmath.js) — fixed fdlibm polynomials built
+  only from exactly-specified IEEE-754 ops — so the same DNA re-derives the byte-identical tree
+  on V8, JavaScriptCore, and SpiderMonkey alike (`npm run xengine` proves V8 ≡ JSC on macOS).
+  v2 envelopes keep replaying bug-for-bug on native math, version-gated forever.
 - Every action you take — water, mist, feed, cut, pinch, wire, unwire, bend (quantized), offline
   gaps, time-lapses — is an event with a sim-timestamp. The sim advances in fixed 15-minute
   quanta, so replay and live play take the exact same path. Even **death is a replayable fact**:
@@ -173,17 +179,28 @@ then hit 🪙 **KEEP**.
 - The token stores the tree's **entire DNA on-chain** — the same envelope a DNA link carries.
   Its metadata is generated on-chain too, and the `animation_url` opens this site's read-only
   viewer, so marketplaces (e.g. OpenSea testnet) render the *actual living tree*, not a picture.
+  This is tested, not hoped: `npm run opensea` embeds the real viewer in a cross-origin iframe
+  with OpenSea's exact `sandbox="allow-scripts"` (opaque origin, storage throws) and asserts the
+  tree replays and renders to pixels inside it.
 - It's **alive**: after you keep it, the button becomes ⛓ UPDATE ON-CHAIN — push your tree's
   latest history whenever you like. Sim-time may never rewind, each tree can only be minted once
   (`treeId = keccak(seed:genesis)`), and yes: a tree that dies can be immortalized dead.
+- **Selling a living token** has a footgun — the seller could update the DNA under a pending
+  sale — so the contract ships buyer protection: `lockUpdates(tokenId, until)` freezes the DNA
+  (the lock may only *extend*, never walk back) and clears automatically on transfer so the buyer
+  plays immediately. Secondary sales pay an **ERC-2981 royalty** (set at deploy, default 5%).
+- **Mainnet-ready:** the same contract + deploy script target **Base mainnet** (`--rpc-url base`);
+  `js/chain.js` has both networks staged — deploy, paste the address, flip `ACTIVE`. Testnet
+  mints stay where they are (play-money tokens are intentionally orphaned by the flip).
 - To try it you need the MetaMask extension, a **fresh test account**, and free Base Sepolia ETH
   from a faucet. The contract lives in [`contracts/`](contracts/) (Foundry + OpenZeppelin,
   `forge test` covered) — see its README for build/deploy.
 
 **Trust caveats (testnet-honest):** the chain *stores* the envelope, it does not *verify* it —
-anyone can check a tree by replaying its DNA in the open sim, but trustless on-chain verification
-would require fixed-point math: replay is bit-identical on the same JS engine, while
-`Math.sin/cos/pow` are not spec-pinned across engines. The integer event format
+anyone can check a tree by replaying its DNA in the open sim. Since v3 envelopes, that replay is
+**bit-identical across JS engines** (pinned math in `js/fmath.js`), so "verify it yourself" now
+holds on any machine; trustless *on-chain* verification would additionally need a Solidity/ZK
+port of the same pinned sim — future work. The integer event format
 (`["W",t]`, `["B",t,id,ax,ay,az,a]`, …) maps 1:1 onto a compact binary encoding when the time
 comes. `treeId` and `simT` are client-supplied honesty rails, not proofs.
 
@@ -191,6 +208,7 @@ comes. `treeId` and `simT` are client-supplied honesty rails, not proofs.
 
 | File | Role |
 |---|---|
+| `js/fmath.js` | pinned transcendental math (fdlibm polynomials) — v3 replay is engine-independent |
 | `js/tree.js` | pure segment-graph tree model + generative growth (Node-testable) |
 | `js/sim.js` | deterministic sim core: fixed-step integrator, season curve, action/event vocabulary, replay, DNA codec |
 | `js/voxels.js` | palette + voxel generation: pot, pebbles, wood, blossom puffs, wire coils |

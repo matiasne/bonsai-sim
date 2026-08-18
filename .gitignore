@@ -20,3 +20,7 @@ dist/
 contracts/cache/
 contracts/out/
 contracts/.env
+contracts/.env.mainnet
+
+# test artifacts
+test/opensea-render.png

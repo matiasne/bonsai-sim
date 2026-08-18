@@ -1,8 +1,12 @@
 /* Pixel Bonsai — pure tree model: segment graph + generative growth.
-   No DOM/THREE dependencies: runs as a classic browser script and in Node for tests. */
+   No DOM/THREE dependencies: runs as a classic browser script and in Node for tests.
+   All transcendental math goes through B.FMath (js/fmath.js) so v3 envelopes
+   replay bit-identically across JS engines; B.Sim flips FMath.legacy for v2. */
 (function (root) {
   'use strict';
   const B = root.Bonsai = root.Bonsai || {};
+  const FM = B.FMath || (typeof require === 'function' ? require('./fmath.js').FMath : null);
+  if (!FM) throw new Error('js/fmath.js must load before js/tree.js');
 
   // Deterministic RNG whose entire state is one uint32 (persisted in saves,
   // so reloading never rerolls growth).
@@ -23,21 +27,21 @@
     add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
     scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
     dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
-    len: (a) => Math.hypot(a[0], a[1], a[2]),
+    len: (a) => FM.hypot3(a[0], a[1], a[2]),
     cross: (a, b) => [
       a[1] * b[2] - a[2] * b[1],
       a[2] * b[0] - a[0] * b[2],
       a[0] * b[1] - a[1] * b[0],
     ],
     norm(a) {
-      const l = Math.hypot(a[0], a[1], a[2]);
+      const l = FM.hypot3(a[0], a[1], a[2]);
       return l < 1e-9 ? [0, 1, 0] : [a[0] / l, a[1] / l, a[2] / l];
     },
     // quaternions as [x,y,z,w] — for composing a bend-drag's many micro
     // rotations into the single net rotation the action log records
     qFromAxisAngle(axis, ang) {
-      const a = V.norm(axis), s = Math.sin(ang / 2);
-      return [a[0] * s, a[1] * s, a[2] * s, Math.cos(ang / 2)];
+      const a = V.norm(axis), s = FM.sin(ang / 2);
+      return [a[0] * s, a[1] * s, a[2] * s, FM.cos(ang / 2)];
     },
     qMul(a, b) {
       return [
@@ -49,12 +53,12 @@
     },
     qToAxisAngle(q) {
       const w = Math.min(1, Math.max(-1, q[3]));
-      const ang = 2 * Math.acos(w);
+      const ang = 2 * FM.acos(w);
       const s = Math.sqrt(Math.max(0, 1 - w * w));
       return s < 1e-6 ? { axis: [0, 1, 0], ang: 0 } : { axis: [q[0] / s, q[1] / s, q[2] / s], ang };
     },
     rotate(u, axis, ang) { // Rodrigues
-      const a = V.norm(axis), c = Math.cos(ang), s = Math.sin(ang);
+      const a = V.norm(axis), c = FM.cos(ang), s = FM.sin(ang);
       const cr = V.cross(a, u), k = V.dot(a, u) * (1 - c);
       return [
         u[0] * c + cr[0] * s + a[0] * k,
@@ -151,7 +155,7 @@
       };
       count(rootSeg);
       // girth keeps building over months and years (log curve: fast at first, slow forever)
-      const trunkBonus = Math.min(2.6, 0.9 * Math.log10(1 + this.ageHours / 150));
+      const trunkBonus = Math.min(2.6, 0.9 * FM.log10(1 + this.ageHours / 150));
       // truly old trees (3y+) get stockier: the thickness ceiling itself rises 6 → 8 by year nine
       const thickCap = 6 + Math.min(2, Math.max(0, (this.ageHours - 26280) / 52560) * 2);
       for (const s of this.segs.values()) {
@@ -220,14 +224,14 @@
       }
       if (s.len < s.maxLen) {
         if (s.end[1] >= CFG.maxHeight && s.dir[1] > 0) return null;   // over the cap: stop climbing
-        const er0 = Math.hypot(s.end[0], s.end[2]);
+        const er0 = FM.hypot2(s.end[0], s.end[2]);
         if (er0 >= CFG.maxRadius && (s.dir[0] * s.end[0] + s.dir[2] * s.end[2]) > 0) return null; // stop sprawling
         s.len = Math.min(s.maxLen, s.len + CFG.growStep);
         this.recompute();
         return { type: 'grow', at: s.end.slice() };
       }
       if (atSegCap || s.end[1] >= CFG.maxHeight) return null;
-      const er = Math.hypot(s.end[0], s.end[2]);
+      const er = FM.hypot2(s.end[0], s.end[2]);
       if (er >= CFG.maxRadius) return null;
 
       // decide the fork BEFORE building the continuation: an over-budget chain
@@ -240,8 +244,8 @@
       const high = s.end[1] > CFG.maxHeight * 0.82;
       const upBias = high ? -0.05 : Math.max(0.02, 0.15 - s.order * 0.03);
       let out = [s.end[0], 0, s.end[2]];
-      const ol = Math.hypot(out[0], out[2]);
-      if (ol < 0.5) { const a = this.rng.next() * Math.PI * 2; out = [Math.cos(a), 0, Math.sin(a)]; }
+      const ol = FM.hypot2(out[0], out[2]);
+      if (ol < 0.5) { const a = this.rng.next() * Math.PI * 2; out = [FM.cos(a), 0, FM.sin(a)]; }
       else out = [out[0] / ol, 0, out[2] / ol];
       const ob = er > CFG.maxRadius * 0.8 ? -0.25 : (high ? 0.24 : 0.06); // near the edge: curl back inward
       const jit = 0.30;
@@ -282,7 +286,7 @@
       if (this.rng.next() > 0.25) return;
       const interior = [...this.segs.values()].filter(s =>
         s.children.length && s.children.length < 3 && s.order < CFG.maxOrder &&
-        s.end[1] < CFG.maxHeight * 0.9 && Math.hypot(s.end[0], s.end[2]) < CFG.maxRadius * 0.85);
+        s.end[1] < CFG.maxHeight * 0.9 && FM.hypot2(s.end[0], s.end[2]) < CFG.maxRadius * 0.85);
       if (!interior.length) return;
       const p = interior[(this.rng.next() * interior.length) | 0];
       const d = V.norm([

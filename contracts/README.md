@@ -7,10 +7,22 @@ envelopes as the tree grows, and it can die on-chain. `tokenURI` is fully on-cha
 whose `animation_url` opens the game's read-only viewer, so marketplaces render the
 actual living tree.
 
-Trust model (testnet): the chain **stores** the envelope, it does not verify it.
+Trust model: the chain **stores** the envelope, it does not verify it.
 `treeId` (keccak of `seed:genesisMs`, blocks double-minting) and monotonic `simT` are
-client-supplied honesty rails. Trustless verification would need a fixed-point sim —
-documented future work in the main README.
+client-supplied honesty rails. Off-chain, anyone can replay a v3 envelope bit-identically
+on any JS engine (`js/fmath.js` pinned math); trustless *on-chain* verification would need
+a Solidity/ZK port of that sim — documented future work in the main README.
+
+Marketplace layer:
+
+- **ERC-2981 royalty** on secondary sales — receiver + bps set in the constructor
+  (deploy default: deployer, 500 = 5%), adjustable via `setRoyalty` (contract owner).
+- **`lockUpdates(tokenId, until)`** — buyer protection for a *mutable* token: the owner
+  freezes the DNA until a timestamp before listing, the lock may only extend (never
+  shorten — `LockMayOnlyExtend`), is capped a year out (`MAX_LOCK_AHEAD`), and clears
+  automatically when the token transfers, so the buyer plays immediately. Buyers: check
+  `updatesLockedUntil(tokenId)` covers your purchase window; note a self-transfer also
+  clears the lock but fires a visible `Transfer` (marketplaces invalidate stale listings).
 
 ## Develop
 
@@ -44,3 +56,25 @@ Basescan verification additionally needs a free Etherscan API key (`--verifier e
 3. Sanity: `cast call <ADDR> "viewerBase()(string)" --rpc-url https://sepolia.base.org`
 4. Put `<ADDR>` into `CONTRACT` in `js/chain.js` and commit. The `broadcast/` directory
    is committed as the deployment record.
+
+> The currently deployed Sepolia contract predates the royalty/lock features — its exact
+> source is in git history (tag/commit `c1cd66b`); `src/BonsaiTree.sol` is the v2 contract
+> that the next deployment (testnet or mainnet) will use.
+
+## Deploy to Base MAINNET (chainId 8453) — real money
+
+1. Use a **real, hardware-backed key** (it becomes the contract's `Ownable` admin —
+   it controls `setViewerBase`/`setImageURI`/`setRoyalty`, so treat it like production
+   infrastructure, NOT the throwaway testnet key). Fund it with a little Base ETH for gas.
+2. Create `.env.mainnet` with `PRIVATE_KEY`, and optionally `ROYALTY_RECEIVER`
+   (defaults to the deployer) and `ROYALTY_BPS` (defaults to 500 = 5%).
+3. ```bash
+   cd contracts && source .env.mainnet
+   forge script script/Deploy.s.sol --rpc-url base --broadcast
+   # verification: add --verify --etherscan-api-key $ETHERSCAN_API_KEY (or Sourcify, as on testnet)
+   ```
+4. Sanity: `cast call <ADDR> "royaltyInfo(uint256,uint256)(address,uint256)" 1 1000000 --rpc-url https://mainnet.base.org`
+5. In `js/chain.js`: paste `<ADDR>` into `NETWORKS.base.CONTRACT`, flip `ACTIVE` to
+   `'base'`, run `npm test`, commit. Testnet mints are intentionally orphaned by the flip.
+6. Pre-flight the marketplace render: `npm run opensea` (embeds the live viewer in
+   OpenSea's exact iframe sandbox and asserts the tree replays + renders).

@@ -4,9 +4,17 @@ pragma solidity ^0.8.24;
 import {Script, console} from "forge-std/Script.sol";
 import {BonsaiTree} from "../src/BonsaiTree.sol";
 
-/// Deploy to Base Sepolia:
+/// Deploy to Base Sepolia (testnet):
 ///   cd contracts && source .env
 ///   forge script script/Deploy.s.sol --rpc-url base_sepolia --broadcast
+///
+/// Deploy to Base MAINNET (real money — use a real, hardware-backed key, NOT
+/// the throwaway testnet one; it becomes the contract's Ownable admin):
+///   cd contracts && source .env.mainnet
+///   forge script script/Deploy.s.sol --rpc-url base --broadcast --verify
+///
+/// Optional env: ROYALTY_RECEIVER (defaults to the deployer),
+/// ROYALTY_BPS (defaults to 500 = 5% on secondary sales).
 contract Deploy is Script {
     function run() external {
         // accept the key with or without a 0x prefix (wallets export both ways)
@@ -14,12 +22,20 @@ contract Deploy is Script {
         bytes memory b = bytes(pkStr);
         if (b.length < 2 || b[0] != "0" || b[1] != "x") pkStr = string.concat("0x", pkStr);
         uint256 pk = vm.parseUint(pkStr);
+
+        address royaltyReceiver = vm.envOr("ROYALTY_RECEIVER", vm.addr(pk));
+        uint96 royaltyBps = uint96(vm.envOr("ROYALTY_BPS", uint256(500)));
+
         vm.startBroadcast(pk);
         BonsaiTree nft = new BonsaiTree(
             "https://mydigitalbonsai.com/#dna=",
-            "https://mydigitalbonsai.com/nft-placeholder.png"
+            "https://mydigitalbonsai.com/nft-placeholder.png",
+            royaltyReceiver,
+            royaltyBps
         );
         vm.stopBroadcast();
         console.log("BonsaiTree deployed at:", address(nft));
+        console.log("Royalty receiver:", royaltyReceiver);
+        console.log("Royalty bps:", royaltyBps);
     }
 }

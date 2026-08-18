@@ -5,8 +5,10 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "test": "node test/smoke.js",
+    "test": "node test/smoke.js && node test/xengine.js",
+    "xengine": "node test/xengine.js",
     "e2e": "node test/e2e.js",
+    "opensea": "node test/opensea.js",
     "app": "env -u ELECTRON_RUN_AS_NODE electron .",
     "dist": "electron-builder"
   },

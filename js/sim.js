@@ -3,13 +3,18 @@
    replays a saved action log, and runs headless in Node tests.
 
    Determinism contract: given the same (seed, genesis ms, hemisphere) and the
-   same sequence of step()/advance() calls, the sim is bit-identical on the same
-   JS engine. Live weather never feeds the sim — it is ambience only. */
+   same sequence of step()/advance() calls, the sim is bit-identical — on the
+   same JS engine for v2 envelopes (native Math), on EVERY engine for v3+
+   (pinned math via js/fmath.js). Live weather never feeds the sim — it is
+   ambience only. */
 (function (root) {
   'use strict';
   const B = root.Bonsai = root.Bonsai || {};
+  const FM = B.FMath || (typeof require === 'function' ? require('./fmath.js').FMath : null);
+  if (!FM) throw new Error('js/fmath.js must load before js/sim.js');
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
+  const ENV_V = 3;                 // envelope version stamped on NEW trees (pinned math)
   const STEP_S = 900;              // one canonical sim quantum: 15 minutes
   const STEP_H = STEP_S / 3600;
   const DEATH_H = 96;              // hours at rock-bottom health before the tree dies
@@ -40,10 +45,14 @@
   }
 
   // Fresh sim state. opts: {seed} for a new deterministic tree (or {tree} to
-  // adopt an existing model), {g} genesis wall-clock ms, {south} hemisphere.
+  // adopt an existing model), {g} genesis wall-clock ms, {south} hemisphere,
+  // {v} envelope version (defaults to ENV_V; v2 states run legacy native math).
   function newState(opts) {
     opts = opts || {};
+    const v = opts.v !== undefined ? opts.v : ENV_V;
+    FM.legacy = v < 3;   // must be set BEFORE the TreeModel seeds itself
     return {
+      v,
       tree: opts.tree || new B.TreeModel(opts.seed !== undefined ? { seed: opts.seed } : null),
       res: { water: 72, mist: 60, food: 55, health: 82, dead: 0 },
       gp: 0,          // fractional growth points
@@ -72,6 +81,7 @@
   // One canonical step. `off` = offline rules (half growth, higher health floor).
   // Returns what happened, for the UI to render — the sim itself never toasts.
   function step(state, off) {
+    FM.legacy = (state.v || 2) < 3;   // version-gated math: old logs replay bug-for-bug
     const out = { grow: [], newlySet: [], startedDying: false, died: false };
     const res = state.res;
     const si = seasonInfo(state.g + state.simT * 1000, state.south);
@@ -115,7 +125,7 @@
     const juv = segs < 26 ? 4.5 : segs < 60 ? 2 : 1;
     const hf = res.health < 25 ? 0.06 : res.health < 60 ? 0.1 + ((res.health - 25) / 35) * 0.8 : 1;
     const ff = 1 + clamp((res.food - 55) / 150, 0, 0.3);
-    state.trimBoost *= Math.pow(0.98, dtH);                 // the opened crown closes again
+    state.trimBoost *= FM.pow(0.98, dtH);                   // the opened crown closes again
     const tb = 1 + Math.min(0.18, state.trimBoost * 0.012); // light reaches the interior
     state.gp += 1.4 * dtH * growth * hf * ff * tb * juv * (off ? 0.5 : 1);   // ~real-life/5 pace
     state.tree.ageTips(dtH * growth * hf * 1.2);
@@ -136,6 +146,7 @@
   //   "W" water · "M" mist · "F" feed · "C" cut(id) · "P" pinch(id)
   //   "w" wire-on(id) · "u" wire-off(id) · "B" bend(id, ax, ay, az, a)
   function applyAction(state, ev) {
+    FM.legacy = (state.v || 2) < 3;
     const res = state.res, tree = state.tree, V = B.Vec;
     if (res.dead) return { ok: false, reason: 'dead' };
     const op = ev[0];
@@ -182,7 +193,7 @@
       if (dir0) {   // canonical instant spring-back, proportional to how unset it is
         const axis = V.cross(seg.dir, dir0);
         const dot = clamp(V.dot(V.norm(seg.dir), V.norm(dir0)), -1, 1);
-        const total = Math.acos(dot) * (1 - setFrac);
+        const total = FM.acos(dot) * (1 - setFrac);
         if (V.len(axis) > 1e-4 && total > 0.02) sprung = tree.nudge(ev[2], V.norm(axis), total);
       }
       return { ok: true, sprung, setFrac };
@@ -213,12 +224,13 @@
     return { axis: B.Vec.norm([ax, ay, az]), ang: ev[6] / 1e4 };
   }
 
-  // ---------- envelope (the DNA): {v:2, seed, g, s, t, e:[events], snap?}
-  // seed: uint32 · g: genesis wall-clock ms · s: 1 = southern hemisphere ·
-  // t: total sim-seconds · snap: optional checkpoint (legacy v1 migration).
+  // ---------- envelope (the DNA): {v, seed, g, s, t, e:[events], snap?}
+  // v: 2 native-math legacy · 3 pinned cross-engine math · seed: uint32 ·
+  // g: genesis wall-clock ms · s: 1 = southern hemisphere · t: total
+  // sim-seconds · snap: optional checkpoint (legacy v1 migration).
   function loadSnap(env) {
     const sn = env.snap;
-    const state = newState({ tree: new B.TreeModel(sn.tree), g: env.g, south: !!env.s });
+    const state = newState({ tree: new B.TreeModel(sn.tree), g: env.g, south: !!env.s, v: env.v || 2 });
     if (sn.res) Object.assign(state.res, sn.res);
     state.gp = sn.gp || 0;
     state.burnH = sn.burnH || 0;
@@ -231,7 +243,7 @@
   // Pure: envelope → sim state. Gap-fills live time between events, applies
   // O/L time ops and user actions in order, then advances to the envelope's t.
   function replay(env) {
-    const state = env.snap ? loadSnap(env) : newState({ seed: env.seed, g: env.g, south: !!env.s });
+    const state = env.snap ? loadSnap(env) : newState({ seed: env.seed, g: env.g, south: !!env.s, v: env.v || 2 });
     for (const ev of env.e || []) {
       if (ev[1] > state.simT) advance(state, ev[1] - state.simT, false);
       if (ev[0] === 'O') advance(state, ev[2], true);
@@ -245,7 +257,7 @@
   // Byte-stable canonical JSON of an envelope — fixed key order, no whitespace.
   // This exact string is what a DNA URL (and one day a chain) carries.
   function canonical(env) {
-    let s = '{"v":2,"seed":' + (env.seed >>> 0) + ',"g":' + env.g +
+    let s = '{"v":' + (env.v || 2) + ',"seed":' + (env.seed >>> 0) + ',"g":' + env.g +
       ',"s":' + (env.s ? 1 : 0) + ',"t":' + env.t + ',"e":' + JSON.stringify(env.e || []);
     if (env.snap) s += ',"snap":' + JSON.stringify(env.snap);
     return s + '}';
@@ -296,7 +308,7 @@
   // snap passes through by reference — a migrated tree's canonical bytes
   // include it, so dropping it would break every hash on such trees.
   function truncateEnvelope(env, simT, n) {
-    const out = { v: 2, seed: env.seed >>> 0, g: env.g, s: env.s ? 1 : 0, t: simT, e: (env.e || []).slice(0, n) };
+    const out = { v: env.v || 2, seed: env.seed >>> 0, g: env.g, s: env.s ? 1 : 0, t: simT, e: (env.e || []).slice(0, n) };
     if (env.snap) out.snap = env.snap;
     return out;
   }
@@ -321,7 +333,7 @@
   }
 
   B.Sim = {
-    STEP_S, STEP_H, DEATH_H, OFFLINE_CAP_S, PACE, SEASON_GROWTH, WIRE_RATE,
+    ENV_V, STEP_S, STEP_H, DEATH_H, OFFLINE_CAP_S, PACE, SEASON_GROWTH, WIRE_RATE,
     seasonInfo, newState, healthTarget, step, advance,
     applyAction, quantBend, decodeBend, loadSnap, replay, canonical,
     dnaEncode, dnaDecode,
