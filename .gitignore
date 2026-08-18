@@ -11,6 +11,10 @@ Thumbs.db
 node_modules/
 npm-debug.log*
 package-lock.json
+.npm-cache/
+
+# Electron desktop app (packaged output; source in electron/ is committed)
+dist/
 
 # Foundry (contracts/) — .env holds the deploy key and must never be committed
 contracts/cache/

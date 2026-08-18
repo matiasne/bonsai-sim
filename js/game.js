@@ -8,6 +8,9 @@
 
   // ---------- constants
   const WALLPAPER = /[?#&]wallpaper/.test(location.search + location.hash);
+  // running inside the native menu-bar app (electron/preload.js sets this marker) —
+  // the panel exists to tend the tree, so its care dock never fades out
+  const DESKTOP_APP = typeof window !== 'undefined' && !!window.bonsaiDesktop;
   const DNA_HASH = /[#&]dna=([^&\s]+)/.exec(location.hash);
   const VIEWER = !!DNA_HASH;   // #dna=… — read-only view of a shared bonsai
   // #wallpaper&seed=<dna>[&nft=<id>] — one-time seed for a fresh wallpaper install:
@@ -2083,8 +2086,9 @@
     if (WALLPAPER && !drag && tms - lastInteract > 30000) theta += dt * 0.02;  // idle: slow turntable
     if (wpDock && !wpDock.classList.contains('hidden')) {
       // fade the care dock out after ~4s of no cursor movement — but keep it up while a
-      // tool is armed or a drag is in flight, so you never lose the active-mode cue mid-tend
-      const awake = drag || mode !== 'view' || tms - dockWake < 4000;
+      // tool is armed or a drag is in flight, so you never lose the active-mode cue mid-tend.
+      // In the menu-bar app the panel is *for* tending, so the dock stays put.
+      const awake = DESKTOP_APP || drag || mode !== 'view' || tms - dockWake < 4000;
       wpDock.classList.toggle('dimmed', !awake);
     }
     rotGroup.rotation.y = theta;

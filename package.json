@@ -3,11 +3,37 @@
   "version": "1.0.0",
   "description": "Pixel Bonsai — 3D pixel-art bonsai care simulation",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "test": "node test/smoke.js",
-    "e2e": "node test/e2e.js"
+    "e2e": "node test/e2e.js",
+    "app": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "electron-builder"
   },
   "devDependencies": {
+    "electron": "^32.3.3",
+    "electron-builder": "^25.0.0",
     "puppeteer-core": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.mydigitalbonsai.tray",
+    "productName": "Pixel Bonsai",
+    "files": [
+      "electron/**",
+      "index.html",
+      "style.css",
+      "js/**",
+      "vendor/**",
+      "nft-placeholder.png"
+    ],
+    "mac": {
+      "category": "public.app-category.lifestyle",
+      "target": [
+        "dmg"
+      ]
+    },
+    "extendInfo": {
+      "LSUIElement": true
+    }
   }
 }

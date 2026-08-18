@@ -40,11 +40,30 @@ npx serve .        # or: python3 -m http.server
 gray wood, bare branches, care refused. You get a 🥀 *dying* warning with a countdown first,
 and good care winds the countdown back. A dead tree can only be replaced (⚙ → 🌱 NEW TREE).
 
+## Keep it in your menu bar 🌳 (native app)
+
+The simplest way to have your bonsai on the desktop — and actually **tend it** — is the little
+**menu-bar app** (Electron). It lives in the macOS menu bar as a small bonsai glyph; click it and a
+panel drops down with the living scene and the full care dock (💧🌫🧪✂️➰🍃⏩). Click away and it
+tucks itself back into the menu bar. No wallpaper host, no *Browsing Mode* toggle, no click-through —
+the panel is a real window, so watering, pruning and wiring just work.
+
+```bash
+npm install      # first time — pulls in Electron
+npm run app      # launch the menu-bar bonsai
+```
+
+The app bundles the whole game (and a vendored copy of three.js), so it runs fully offline except for
+weather. The sim runs while the panel is open; close it and time pauses — reopen and the tree
+fast-forwards the hours you were away, exactly like reloading the page. To ship a double-clickable
+`.app`/`.dmg`, run `npm run dist` (electron-builder; macOS category + `LSUIElement`, so it stays a
+menu-bar agent with no dock icon).
+
 ## Use it as a desktop wallpaper 🖼
 
-Open **`wallpaper.html`** instead of `index.html` and you get just the living scene, edge to edge —
-no buttons, widescreen-aware, slowly rotating when idle. The tree keeps growing, real weather keeps
-working, and progress saves inside the wallpaper app.
+Prefer it edge-to-edge *behind* your icons? Open **`wallpaper.html`** instead of `index.html` and you
+get just the living scene, edge to edge — no buttons, widescreen-aware, slowly rotating when idle. The
+tree keeps growing, real weather keeps working, and progress saves inside the wallpaper app.
 
 **Windows — Wallpaper Engine** (Steam): copy this whole folder into
 `...\steamapps\common\wallpaper_engine\projects\myprojects\bonsai-sim` — it ships a `project.json`,
