@@ -684,10 +684,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   // identical repeated message: kept, not re-shown (soggy toast is deterministic)
   await page.evaluate(() => { __bonsai.res.water = 95; });
-  await page.click('#btn-water');
+  await page.evaluate(() => __bonsai.water());
   await sleep(200);
   await page.evaluate(() => { const t = document.querySelector('#toasts .toast'); if (t) t.dataset.mark = '1'; });
-  await page.click('#btn-water');
+  await page.evaluate(() => __bonsai.water());
   await sleep(200);
   const dedupe = await page.evaluate(() => {
     const ts = document.querySelectorAll('#toasts .toast:not(.has-action)');
@@ -784,7 +784,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(p9.years === 9, 'switched to the +9y vision');
   check(p9.stats.tips >= p4.stats.tips, `+9y fuller than +4y (tips ${p4.stats.tips} → ${p9.stats.tips})`);
   const waterBefore = await page.evaluate(() => __bonsai.res.water);
-  await page.click('#btn-water');
+  await page.evaluate(() => __bonsai.water());
   await sleep(150);
   const waterAfter = await page.evaluate(() => __bonsai.res.water);
   check(Math.abs(waterAfter - waterBefore) < 0.5, 'care actions are blocked during the vision');
@@ -948,7 +948,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(bgSakura === '#f3d7e2', `sakura preset changes the clear color (${bgSakura})`);
   // still interactive after a background change (picking unaffected)
   const waterPreBg = await page.evaluate(() => __bonsai.res.water);
-  await page.click('#btn-water');
+  await page.evaluate(() => __bonsai.water());
   await sleep(150);
   check(await page.evaluate(() => __bonsai.res.water) > waterPreBg, 'care still works after a background change');
   const bgPersist = await (async () => {
@@ -983,7 +983,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const dnaA = await page.evaluate(() => __bonsai.dnaCode());
     const dnaB = await wpSync.evaluate(() => __bonsai.dnaCode());
     check(dnaA === dnaB, 'both windows show the identical tree envelope');
-    await wpSync.evaluate(() => document.querySelector('#btn-water') && document.querySelector('#btn-water').click());
+    await wpSync.evaluate(() => __bonsai.water());
     await sleep(1500);
     const dnaA2 = await page.evaluate(() => __bonsai.dnaCode());
     const dnaB2 = await wpSync.evaluate(() => __bonsai.dnaCode());
@@ -1014,6 +1014,28 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   check(wpState.bufH === 352 && wpState.bufW >= 600 && wpState.bufW <= 660,
     `wallpaper buffer follows the screen aspect at 2× (${wpState.bufW}×${wpState.bufH})`);
   check(Math.abs(wpState.cssW - 1600) < 4, `scene fills the screen edge to edge (${Math.round(wpState.cssW)}px)`);
+
+  // --- desktop care dock: the only care controls the wallpaper shows. It's visible,
+  // its buttons drive the real actions, and a tool button arms that mode.
+  const dockShown = await wp0.evaluate(() => {
+    const d = document.querySelector('#wp-dock');
+    return d && !d.classList.contains('hidden') && getComputedStyle(d).display === 'flex';
+  });
+  check(dockShown, 'wallpaper shows the care dock (the desktop\'s only care controls)');
+  const dockWater = await wp0.evaluate(async () => {
+    const before = __bonsai.res.water;
+    document.querySelector('#wp-water').click();
+    await new Promise(r => setTimeout(r, 120));
+    return { before, after: __bonsai.res.water };
+  });
+  check(dockWater.after > dockWater.before, `dock 💧 waters from the desktop (${dockWater.before.toFixed(1)} → ${dockWater.after.toFixed(1)})`);
+  const dockPrune = await wp0.evaluate(() => {
+    document.querySelector('#wp-prune').click();
+    return { mode: __bonsai.mode, active: document.querySelector('#wp-prune').classList.contains('active') };
+  });
+  check(dockPrune.mode === 'prune' && dockPrune.active, 'dock ✂️ arms prune mode and lights up');
+  // put the tool away so it doesn't bleed into later assertions on this page
+  await wp0.evaluate(() => __bonsai.setMode('view'));
 
   // a coarse density saved by the desktop page (shared localStorage) must NOT leave
   // the wallpaper chunky — it always renders at the fine 2× buffer, and saving from
@@ -1146,8 +1168,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     'dead tree stands bare with a 🪦 status and Departed stage');
   const refusal = await page.evaluate(() => {
     const before = __bonsai.res.water;
-    document.querySelector('#btn-water').click();
-    document.querySelector('#btn-prune').click();
+    __bonsai.water();
+    __bonsai.setMode('prune');
     document.querySelector('#btn-future').click();
     return {
       before, after: __bonsai.res.water, mode: __bonsai.mode,

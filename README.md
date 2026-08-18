@@ -62,6 +62,12 @@ With input enabled you can do **everything right on the desktop**: drag the pot,
 water/mist/feed — and tap a branch for the ✂️ cut / ➰ wire menu (cut offers a brief UNDO;
 after wiring, drag the branch to bend, then tap empty space to put the tool away).
 
+**A care dock, right on the wallpaper:** so you're never guessing where to tap, wallpaper
+mode floats a small control bar along the bottom — 💧 water · 🌫 mist · 🧪 feed · ✂️ prune ·
+➰ wire · 🍃 trim · ⏩ time-lapse. It fades away when the cursor is idle and reappears the
+moment you move the mouse; the ✂️/➰/🍃 tools light up while armed (then click a branch or
+pad to do the work). It needs the host's mouse input enabled, same as tapping the scene.
+
 **Same tree, live-synced:** once you **keep** (mint) a bonsai, open ⚙ → *🖼 PUT ON MY
 DESKTOP* to copy a personalized wallpaper link that carries your tree. When the wallpaper
 and your browser load from the **same site** (both `mydigitalbonsai.com`, or both the same
